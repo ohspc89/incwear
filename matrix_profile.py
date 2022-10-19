@@ -1,9 +1,8 @@
 # Isn't it better if we just read it from h5 file directly???
 import sys
-import matrixprofile
+import stumpy
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
 
 sys.path.append('..')
@@ -13,17 +12,39 @@ from ReadSensorLog import *
 
 # Move to the directory where the h5 files are stored
 #   so that you can later use dir to list all filenames at once and loop around
-filename = '/Users/joh/Documents/PYTHON_porting/MATLAB/h5files/20200217-082740_106v1.h5'
+filename = '../PYTHON_porting/MATLAB/h5files/20200217-082740_106v1.h5'
 
 # Before reading an individual h5 file, we need to read the csv file from REDCap.
 redcap_file = pd.read_csv('~/Documents/PYTHON_porting/MATLAB/WearableSensorsGuate_DATA_2022-09-19_0904.csv')
 
-# fullid = infant_id + visit
+# fullid = infant_id + visit (ex. '106v1')
 fullid = filename.split('_')[-1].split('.h5')[0]
+# time_pts will be the recording start and end times (ex. '10:23', '22:42')
 time_pts = find_timepts_from_redcap(redcap_file, fullid)
+# time_pts_dt will be in the datetime format
+#   (ex. datetime(2020, 2, 17, 10, 23, 00))
+time_pts_dt = make_start_end_datetime(time_pts, filename)
 
 # Up to this point works (Oct.18, 22)
-test = Subject(filename, time_pts)
+test = Subject(filename)                    # input: a h5 filename
+
+test.get_ind_acc_threshold(time_pts_dt)     # get_ind_acc_threshold is a function of this class: subject
+                                            #   You either specify the datetimes of recording start and end
+                                            #   or it will simply analyze the entire recording.
+                                            #   To test another scenario, try running it without any parameter.
+                                            # The order of the output is LaccTh, LnaccTh, RaccTh, RnaccTh
+
+# Once you get the individual acceleration thresholds,
+#   you should have another attribute: accmags
+# accmags is a pandas DataFrame with two columns: 'lmag' and 'rmag'
+#   with lmag being the detrended acceleration norm values and rmag being the right-side counterpart
+test.accmags.plot()
+plt.show()
+
+# NOW you can consider doing some matrixprofile analysis
+# But just don't run it on a mac. It takes forever.
+m = 640
+mp = stumpy.stump(test.accmags['lmag'], m)
 
 ########
 # almost implemented
