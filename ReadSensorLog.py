@@ -45,7 +45,7 @@ then a user can access its sub-attribute, such as caseID [well but it's not used
 filename = './MATLAB/h5files/20200217-082740_106v1.h5'
 class Subject():
 
-    def __init__(self, filename):
+    def __init__(self, filename, time_pts):
         # Read the HDF5 file
         f = h5py.File(filename, 'r')
 
@@ -98,6 +98,21 @@ class Subject():
         # This may be used later for plotting
         self.time = (self.left['Time'] - self.left['Time'][0])/1e6
 
+        # get the recording start & end indices
+        # time_pts should be a list of two timepoints
+        in_en_dts = self._make_start_end_datetime(time_pts)
+
+        # Getting the time differences:
+        # 1) start_datetime - donned_datetime
+        # 2) start_datetime - doffed_datetime
+        diffs_in_microsec = map(lambda x: x - self.calc_datetime(self.left['Time'][0]), in_en_dts)
+
+        # This list will include indices of the recording start time (in) and the recording end time (en).
+        indices = list(map(lambda x: round((x.seconds*1e6 + x.microseconds)/50000), diffs_in_microsec))
+
+        # This will be one input to self._get_mag
+        self.row_idx = [x for x in range(indices[0], indices[1])]
+
     # This function will calculate the actual date and time from the time recorded in the sensor
     def calc_datetime(self, x):
         tOffset = -6                            # Guatemala: UTC-6 (No Daylight Savings Time)
@@ -138,6 +153,26 @@ class Subject():
         else:
             print("Your option is either [median] or [customfunc]")
 
+    # Prepare the datetime objects based on 
+    #   donned and doffed times provided as an input
+    def _make_start_end_datetime(self, don_and_doff):
+        # Getting year, month, and day from the filename
+        temp = self.filename.split('/')[-1].split('-')[0]
+        year    = int(temp[0:4])
+        month   = int(temp[4:6])
+        day     = int(temp[6:8])
+        # Split hour and minute
+        donned_h, donned_m = don_and_doff[0].split(":")
+        doffed_h, doffed_m = don_and_doff[1].split(":")
+        # donned_dt could be the earliest point that matches donned_h
+        donned_dt = datetime(year, month, day, int(donned_h), int(donned_m), 0, 0)
+        # Let's be lenient, and give 30 seconds of datapoints more
+        if int(doffed_h) < 13 & int(doffed_h) > int(donned_h):
+            doffed_dt = datetime(year, month, day+1, int(doffed_h), int(doffed_m), 30, 0)
+        else:
+            doffed_dt = datetime(year, month, day, int(doffed_h), int(doffed_m), 30, 0)
+        return ([donned_dt, doffed_dt])
+
     # winsize in second unit
     def _mov_avg_filt(self, winsize, pdSeries):
         L = int(self.sfreq * winsize)
@@ -161,7 +196,7 @@ class Subject():
         elif sum(np.sign(reject_th)) != 0:
             print(errmsg)
         else:
-            mags2 = self._get_mag('Accelerometer', row_idx, 'median')
+            mags2 = self._get_mag('Accelerometer', self.row_idx, 'median')
             mags2['rectlmag'] = mags2['lmag'].apply(lambda x: abs(x) if x > max(reject_th) or x < min(reject_th) else 0)
             mags2['rectrmag'] = mags2['rmag'].apply(lambda x: abs(x) if x > max(reject_th) or x < min(reject_th) else 0)
 
@@ -178,7 +213,7 @@ class Subject():
 
     # This is equivalent to the MATLAB script
     def get_ind_acc_threshold(self, row_idx, reject_th = 3.2501, winsize = 0.5, height = 1.0):
-        mags = self._get_mag('Accelerometer', row_idx, 'median')
+        mags = self._get_mag('Accelerometer', self.row_idx, 'median')
         mags2['lposthcand'] = mags2['lmag'].apply(lambda x: x if x > 0 and x < reject_th else 0)
         mags2['lnegthcand'] = mags2['lmag'].apply(lambda x: x if x < 0 and x > reject_th else 0)
         mags2['rposthcand'] = mags2['rmag'].apply(lambda x: x if x > 0 and x < reject_th else 0)
@@ -206,5 +241,10 @@ class Subject():
 
             return([self.lavth, self.ravth])
 
-    # 
-
+# This is a function that extracts times when the sensor was eonned or doffed     
+def find_timepts_from_redcap(redcap_csv, full_id):
+    # full_id will be in the format: "@@@v$" where @@@ is the infant id and $ is the number of visit
+    # times will be the sensor donned and doffed times, based on the full_id
+    infant_id, visit = full_id.split('v')
+    times = redcap_csv[(redcap_csv.study_id == int(infant_id)) & (redcap_csv.visit == int(visit))][['time_donned', 'time_doffed']]
+    return(times.values[0])

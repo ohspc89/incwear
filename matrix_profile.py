@@ -9,14 +9,24 @@ import matplotlib.pyplot as plt
 sys.path.append('..')
 # This is the script I wrote to read raw data from h5 file directly
 #   and do some pre-processing (up to magnitude calculation)
-import ReadSensorLog
+from ReadSensorLog import *
 
-# A 'Subject' object will have some basic features...
-test = ReadSensorLog.Subject('./h5files/20200217-082740_106v1.h5')
-test.left
+# Move to the directory where the h5 files are stored
+#   so that you can later use dir to list all filenames at once and loop around
+filename = '/Users/joh/Documents/PYTHON_porting/MATLAB/h5files/20200217-082740_106v1.h5'
 
-times = list(test.rtime)
-times[0]
+# Before reading an individual h5 file, we need to read the csv file from REDCap.
+redcap_file = pd.read_csv('~/Documents/PYTHON_porting/MATLAB/WearableSensorsGuate_DATA_2022-09-19_0904.csv')
+
+# fullid = infant_id + visit
+fullid = filename.split('_')[-1].split('.h5')[0]
+time_pts = find_timepts_from_redcap(redcap_file, fullid)
+
+# Up to this point works (Oct.18, 22)
+test = Subject(filename, time_pts)
+
+########
+# almost implemented
 
 # Timepoint
 tp = test.left['Time'][0]
@@ -44,17 +54,7 @@ def calc_date(tp):
             seconds = secs, minutes = mins, hours = hrs, microseconds = rem3 % 1e6)
     return(start_date)
 
-# How to get in and en values? You need to make use of id_doc.csv file.
-don_doff = pd.read_csv('id_doc.csv')
-full_id = (test.filename.split('_')[1]).split('.h5')[0]
 
-# find_start_end will return the times when the sensor was donned or doffed
-def find_start_end(don_doff, full_id):
-    # don_doff should be the table read from id_doc.csv file
-    # full_id will be in the format: '@@@v$' where @@@ is the infant id and $ is the number of visit
-    # times will be the sensor donned and doffed times, based on the full_id
-    times = don_doff[don_doff.full_id == full_id][['time_donned', 'time_doffed']]
-    return(times.values[0])
 
 # make_start_end_datetime will return the datetimes that reflect
 #   donned and doffed times
