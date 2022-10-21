@@ -45,7 +45,7 @@ then a user can access its sub-attribute, such as caseID [well but it's not used
 #filename = './MATLAB/h5files/20200217-082740_106v1.h5'
 class Subject():
 
-    def __init__(self, filename):
+    def __init__(self, filename, in_en_dts):
         # Read the HDF5 file
         f = h5py.File(filename, 'r')
 
@@ -87,7 +87,7 @@ class Subject():
         self.sfreq = int(1/self.T)
 
         # Recorded timepoints - may not use, but just in case
-        self.rtime = map(self.calc_datetime, self.left['Time'])
+        self.rtime = map(self._calc_datetime, self.left['Time'])
 
         # 'Processed' - the orientation in quarternion
         self.procs = f['Processed']
@@ -98,8 +98,11 @@ class Subject():
         # This may be used later for plotting
         self.time = (self.left['Time'] - self.left['Time'][0])/1e6
 
+        # Let's put in the index with the recording start time(in) and the end time(en) compensated
+        self.row_idx = self._prep_row_idx(in_en_dts)
+
     # This function will calculate the actual date and time from the time recorded in the sensor
-    def calc_datetime(self, x):
+    def _calc_datetime(self, x):
         tOffset = -6                            # Guatemala: UTC-6 (No Daylight Savings Time)
         div = 24*3600*1e6
         div2 = 3600*1e6
@@ -152,7 +155,7 @@ class Subject():
 
     # All relevant parameter values coming from Trujillo-Priego et al, (2017)
     # This needs further development for sure...
-    def get_ind_acc_threshold_ivan(self, in_en_dts=None, reject_th=[-1.02, 1.32], winsize=0.5, height=1.0):
+    def get_ind_acc_threshold_ivan(self, reject_th=[-1.02, 1.32], winsize=0.5, height=1.0):
         errmsg = "The rejection threshold for the accelerometer data should be a list of \
                 a positive and a negative threshold"
         if type(reject_th) is not list:
@@ -162,8 +165,7 @@ class Subject():
         elif sum(np.sign(reject_th)) != 0:
             print(errmsg)
         else:
-            row_idx = self._prep_row_idx(in_en_dts)
-            mags2 = self._get_mag('Accelerometer', row_idx, 'median')
+            mags2 = self._get_mag('Accelerometer', self.row_idx, 'median')
             mags2['rectlmag'] = mags2['lmag'].apply(lambda x: abs(x) if x > max(reject_th) or x < min(reject_th) else 0)
             mags2['rectrmag'] = mags2['rmag'].apply(lambda x: abs(x) if x > max(reject_th) or x < min(reject_th) else 0)
 
@@ -179,13 +181,12 @@ class Subject():
 
     # This is equivalent to the MATLAB script
     # You can provide in_en_dts and/or det_option ('median' or 'customfunc')
-    def get_ind_acc_threshold(self, in_en_dts=None, det_option='median'):
+    def get_ind_acc_threshold(self, det_option='median'):
 
-        row_idx = self._prep_row_idx(in_en_dts)
         reject_th = 3.2501
         height = 1.0
         
-        mags2 = self._get_mag('Accelerometer', row_idx, det_option)
+        mags2 = self._get_mag('Accelerometer', self.row_idx, det_option)
         mags2['lposthcand'] = mags2['lmag'].apply(lambda x: x if x > 0 and x < reject_th else 0)
         mags2['lnegthcand'] = mags2['lmag'].apply(lambda x: abs(x) if x < 0 and x > -reject_th else 0)
         mags2['rposthcand'] = mags2['rmag'].apply(lambda x: x if x > 0 and x < reject_th else 0)
@@ -211,7 +212,7 @@ class Subject():
             # Getting the time differences:
             # 1) start_datetime - donned_datetime
             # 2) start_datetime - doffed_datetime
-            diffs_in_microsec = map(lambda x: x - self.calc_datetime(self.left['Time'][0]), in_en_dts)
+            diffs_in_microsec = map(lambda x: x - self._calc_datetime(self.left['Time'][0]), in_en_dts)
 
             # This list will include indices of the recording start time (in) and the recording end time (en).
             indices = list(map(lambda x: round((x.seconds*1e6 + x.microseconds)/50000), diffs_in_microsec))
@@ -243,15 +244,62 @@ class Subject():
 
             return([self.lavth, self.ravth])
 
-    def get_count(self):
+    def _get_count(self):
         acounts = self.accmags.apply(np.sign)     # self.accmags is a DataFrame with two columns: lmag, rmag
-        angvels = self._get_mag('Gyroscope', 'median')      # angvels is another DataFrame with two columns
+        angvels = self._get_mag('Gyroscope', self.row_idx, 'median')      # angvels is another DataFrame with two columns
         acounts[angvels.le(0)] = 0                          # When angular velocity value is 0, count is 0.
         return(acounts)
 
     # Let's continue working on it over the weekend or so (10/19/22)
-    #def get_Tcount(self)
+    def _get_Tcount(self):
+        # _get_count does not seem to take too much of the time. We may use it.
+        acounts = self._get_count()
+        negcntidx = (acounts == -1)
+        poscntidx = (acounts == 1)
 
+        # Let's start with collecting all acc values that went over the threshold
+        for_left_pos    = np.where(self.accmags['lmag'][poscntidx] > self.laccth)
+        for_right_pos   = np.where(self.accmags['rmag'][poscntidx] > self.raccth)
+        for_left_neg    = np.where(self.accmags['lmag'][negcntidx] < self.lnaccth)
+        for_right_neg   = np.where(self.accmags['rmag'][negcntidx] < self.rnaccth)
+
+        # parameters = indices of data points that are over the threshold (over_th_array) and
+        #               acounts['lmags'] or acounts['rmags']
+        def mark_Tcount(over_th_array, acounts, pos=True):
+            if pos:
+                corrsign = 1
+            else:
+                corrsign = -1
+            N = len(over_th_array)
+            Tcount = np.zeros(N)
+            for i, j in enumerate(over_th_array):
+                if (Tcount[j] == corrsign) or (Tcount[over_th_array[i+1]] == corrsign):
+                    continue
+                else:
+                    # If three consecutive data are 1 or -1, the third data point's Tcount would be 1 or -1
+                    if np.all(acounts[j:j+3] == corrsign):
+                        Tcount[j+2] = corrsign
+                    else:
+                        Tcount[j] = corrsign
+
+            nonzeroTC = np.where(Tcount != 0)
+
+            # Remove duplicates
+            for i, j in enumerate(nonzeroTC):
+                if nonzeroTC[i+1] == (j+1):
+                    Tcount[j] = 0
+
+            return(Tcount)
+
+        # keep failing this attempt...
+        #self.Tcounts = pd.DataFrame(data = dict(zip(['L', 'R'], map(partial(mark_Tcount, side=['L', 'R']), [for_left, for_right]))))
+        ltcounts  = mark_Tcount(for_left_pos, acounts, True)
+        lntcounts = mark_Tcount(for_left_neg, acounts, False)
+        rtcounts  = mark_Tcount(for_right_pos, acounts, True)
+        rntcounts = mark_Tcount(for_right_neg, acounts, False)
+        self.Tcounts = pd.DataFrame(data = {'L':ltcounts + lntcounts, 'R':rtcounts+rntcounts})
+        
+        return(self.Tcounts)
 
 # This is a function that extracts times when the sensor was eonned or doffed     
 def find_timepts_from_redcap(redcap_csv, full_id):

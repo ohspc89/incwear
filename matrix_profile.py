@@ -26,13 +26,32 @@ time_pts = find_timepts_from_redcap(redcap_file, fullid)
 time_pts_dt = make_start_end_datetime(time_pts, filename)
 
 # Up to this point works (Oct.18, 22)
-test = Subject(filename)                    # input: a h5 filename
+test = Subject(filename, time_pts_dt)                    # input: a h5 filename
 
-test.get_ind_acc_threshold(time_pts_dt)     # get_ind_acc_threshold is a function of this class: subject
-                                            #   You either specify the datetimes of recording start and end
-                                            #   or it will simply analyze the entire recording.
-                                            #   To test another scenario, try running it without any parameter.
-                                            # The order of the output is LaccTh, LnaccTh, RaccTh, RnaccTh
+test.get_ind_acc_threshold()     # get_ind_acc_threshold is a function of this class: subject
+                                 #   You either specify the datetimes of recording start and end
+                                 #   or it will simply analyze the entire recording.
+                                 #   To test another scenario, try running it without any parameter.
+                                 # The order of the output is LaccTh, LnaccTh, RaccTh, RnaccTh
+out = test._get_Tcount()
+acounts = test._get_count()
+
+
+
+
+
+temp = pd.DataFrame({'hello':[1,2,3,4,5,6,7,8,9,10], 'bye':[3,3,3,3,3,3,3,3,3,3]})
+temp2 = pd.DataFrame({'hello':[1,2,3,4,5,6,7,8,9,10], 'bye':[3,3,3,3,3,3,3,3,3,3]})
+def you(df, side='L'):
+    if side == 'R':
+        print('RRRR')
+    else:
+        print('LLLL')
+    newdf = df['hello'] + 1
+    return(newdf)
+
+temp3 = pd.DataFrame(data = dict(zip(['A', 'B'], list(map(partial(you, side=['L', 'R']), [temp, temp2])))))
+temp3
 
 # Once you get the individual acceleration thresholds,
 #   you should have another attribute: accmags
