@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-sys.path.append('..')
+#sys.path.append('..')
 # This is the script I wrote to read raw data from h5 file directly
 #   and do some pre-processing (up to magnitude calculation)
 from ReadSensorLog import *
@@ -34,6 +34,7 @@ test.get_ind_acc_threshold()     # get_ind_acc_threshold is a function of this c
                                  #   To test another scenario, try running it without any parameter.
                                  # The order of the output is LaccTh, LnaccTh, RaccTh, RnaccTh
 out = test._get_Tcount()
+out.L
 acounts = test._get_count()
 
 
