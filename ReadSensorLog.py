@@ -248,20 +248,23 @@ class Subject():
         acounts = self.accmags.apply(np.sign)     # self.accmags is a DataFrame with two columns: lmag, rmag
         angvels = self._get_mag('Gyroscope', self.row_idx, 'median')      # angvels is another DataFrame with two columns
         acounts[angvels.le(0)] = 0                          # When angular velocity value is 0, count is 0.
+        acounts.rename(columns={'lmag':'lcount', 'rmag':'rcount'}, inplace=True)
         return(acounts)
 
     # Let's continue working on it over the weekend or so (10/19/22)
     def _get_Tcount(self):
         # _get_count does not seem to take too much of the time. We may use it.
         acounts = self._get_count()
-        negcntidx = (acounts == -1)
-        poscntidx = (acounts == 1)
+        lcombined = pd.merge(self.accmags['lmag'], acounts['lcount'], right_index = True, left_index = True)
+        rcombined = pd.merge(self.accmags['rmag'], acounts['rcount'], right_index = True, left_index = True)
 
         # Let's start with collecting all acc values that went over the threshold
-        for_left_pos    = np.where(self.accmags['lmag'][poscntidx] > self.laccth)
-        for_right_pos   = np.where(self.accmags['rmag'][poscntidx] > self.raccth)
-        for_left_neg    = np.where(self.accmags['lmag'][negcntidx] < self.lnaccth)
-        for_right_neg   = np.where(self.accmags['rmag'][negcntidx] < self.rnaccth)
+        # The output of np.where would be a tuple - so take the first value
+        # I do this to reduce the preprocessing time...
+        for_left_pos    = np.where(lcombined[lcombined.lcount == 1].lmag > self.laccth)[0]
+        for_right_pos   = np.where(rcombined[rcombined.rcount == 1].rmag > self.raccth)[0]
+        for_left_neg    = np.where(lcombined[lcombined.lcount == -1].lmag < self.lnaccth)[0]
+        for_right_neg   = np.where(rcombined[rcombined.rcount == -1].rmag < self.rnaccth)[0]
 
         # parameters = indices of data points that are over the threshold (over_th_array) and
         #               acounts['lmags'] or acounts['rmags']
@@ -270,10 +273,18 @@ class Subject():
                 corrsign = 1
             else:
                 corrsign = -1
-            N = len(over_th_array)
+            N = acounts.shape[0]
+            M = over_th_array.shape[0]
             Tcount = np.zeros(N)
             for i, j in enumerate(over_th_array):
-                if (Tcount[j] == corrsign) or (Tcount[over_th_array[i+1]] == corrsign):
+                # "over_th_array" has the indices of the acceleration values that are over a threshold (left or right)
+                # [j] gives one of those indices while [i] indicates the order of [j] in "over_th_array".
+                # It could be that the Tcount value at the current index may have been set
+                #   by the previous index (ex. [j-2] satisfied the "else" condition so Tcount[j] = 1 or -1
+                # If so, skip to the next index.
+                # Also, if the next index is not zero, then the current Tcount[j] is considered as a redundant count
+                #   and marked off (this is from the original MATLAB code). So we can skip such indices here.
+                if (Tcount[j] == corrsign) or ((i <= (M-2)) and (Tcount[over_th_array[i+1]] == corrsign)):
                     continue
                 else:
                     # If three consecutive data are 1 or -1, the third data point's Tcount would be 1 or -1
@@ -282,12 +293,17 @@ class Subject():
                     else:
                         Tcount[j] = corrsign
 
-            nonzeroTC = np.where(Tcount != 0)
+            nonzeroTC = np.where(Tcount != 0)[0]
+            L = len(nonzeroTC)
 
             # Remove duplicates
             for i, j in enumerate(nonzeroTC):
-                if nonzeroTC[i+1] == (j+1):
+                if (i <= (L-2)) and (nonzeroTC[i+1] == (j+1)):
+                    print("Current one removed: %d" % (i))
                     Tcount[j] = 0
+                elif (i == (L-1)) and (nonzeroTC[i-1] == (j-1)):
+                    print("Last time, and the previous one removed: %d" % (i))
+                    Tcount[j-1] = 0
 
             return(Tcount)
 
