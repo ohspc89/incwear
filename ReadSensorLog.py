@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 from functools import partial
 import matplotlib.pyplot as plt
-import time
 from scipy.signal import find_peaks, detrend
 from datetime import datetime, timedelta
 
@@ -45,7 +44,8 @@ then a user can access its sub-attribute, such as caseID [well but it's not used
 #filename = './MATLAB/h5files/20200217-082740_106v1.h5'
 class Subject():
 
-    def __init__(self, filename, in_en_dts):
+    # Make the default detrend option to median. Another option is 'customfunc'.
+    def __init__(self, filename, in_en_dts, det_option = 'median'):
         # Read the HDF5 file
         f = h5py.File(filename, 'r')
 
@@ -101,6 +101,15 @@ class Subject():
         # Let's put in the index with the recording start time(in) and the end time(en) compensated
         self.row_idx = self._prep_row_idx(in_en_dts)
 
+        # acceleration and gyrocscope norms
+        self.accmags = self._get_mag('Accelerometer', self.row_idx, det_option)
+
+        # Storing the acceleration threshold values: [laccth, lnaccth, raccth, rnaccth]
+        self.laccth, self.lnaccth, self.raccth, self.rnaccth = self._get_ind_acc_threshold()
+
+        #self.Tcount = self._get_Tcount()
+        self.Tmov = self._get_mov()
+
     # This function will calculate the actual date and time from the time recorded in the sensor
     def _calc_datetime(self, x):
         tOffset = -6                            # Guatemala: UTC-6 (No Daylight Savings Time)
@@ -122,7 +131,7 @@ class Subject():
 
     # dtype argument should be either 'Accelerometer' or 'Gyroscope'
     # row_idx should be a list of two indices: user-specified array start and end
-    # det_option: how are you going to detrend the data?
+    # det_option: how are you going to [det]rend the data?
     def _get_mag(self, dtype, row_idx=None, det_option='median'):
         if row_idx is None:
             row_idx = [x for x in range(self.N)]
@@ -165,7 +174,8 @@ class Subject():
         elif sum(np.sign(reject_th)) != 0:
             print(errmsg)
         else:
-            mags2 = self._get_mag('Accelerometer', self.row_idx, 'median')
+            #mags2 = self._get_mag('Accelerometer', self.row_idx, 'median')
+            mags2 = self.accmags.copy()
             mags2['rectlmag'] = mags2['lmag'].apply(lambda x: abs(x) if x > max(reject_th) or x < min(reject_th) else 0)
             mags2['rectrmag'] = mags2['rmag'].apply(lambda x: abs(x) if x > max(reject_th) or x < min(reject_th) else 0)
 
@@ -173,39 +183,39 @@ class Subject():
             mags2['avgrmag'] = self._mov_avg_filt(winsize, mags2['rectrmag'])
 
 
-            self.laccth = self._calc_ind_threshold(self._local_maxima(mags2.avglmag.values, height=height)[1])
-            self.raccth = self._calc_ind_threshold(self._local_maxima(mags2.avgrmag.values, height=height)[1])
+            laccth = self._calc_ind_threshold(self._local_maxima(mags2.avglmag.values, height=height)[1])
+            raccth = self._calc_ind_threshold(self._local_maxima(mags2.avgrmag.values, height=height)[1])
 
             # Now these values will be used for both positive and negative borders
-            return([self.laccth, self.raccth])
+            return([laccth, raccth])
 
     # This is equivalent to the MATLAB script
-    # You can provide in_en_dts and/or det_option ('median' or 'customfunc')
-    def get_ind_acc_threshold(self, det_option='median'):
+    def _get_ind_acc_threshold(self):
 
         reject_th = 3.2501
         height = 1.0
-        
-        mags2 = self._get_mag('Accelerometer', self.row_idx, det_option)
+ 
+        #mags2 = self._get_mag('Accelerometer', self.row_idx, det_option)
+        mags2 = self.accmags.copy()
         mags2['lposthcand'] = mags2['lmag'].apply(lambda x: x if x > 0 and x < reject_th else 0)
         mags2['lnegthcand'] = mags2['lmag'].apply(lambda x: abs(x) if x < 0 and x > -reject_th else 0)
         mags2['rposthcand'] = mags2['rmag'].apply(lambda x: x if x > 0 and x < reject_th else 0)
         mags2['rnegthcand'] = mags2['rmag'].apply(lambda x: abs(x) if x < 0 and x > -reject_th else 0)
 
         # Let's make this mags2 an attribute of this class object
-        self.accmags = mags2[['lmag', 'rmag']].copy()
+        #self.accmags = mags2[['lmag', 'rmag']].copy()
 
         left_pos_peaks  = self._local_maxima(mags2.lposthcand.values, height = height)[1]
         left_neg_peaks  = self._local_maxima(mags2.lnegthcand.values, height = height)[1]
         right_pos_peaks = self._local_maxima(mags2.rposthcand.values, height = height)[1]
         right_neg_peaks = self._local_maxima(mags2.rnegthcand.values, height = height)[1]
 
-        self.laccth  = self._calc_ind_threshold(left_pos_peaks)
-        self.lnaccth = self._calc_ind_threshold(left_neg_peaks)*-1
-        self.raccth  = self._calc_ind_threshold(right_pos_peaks)
-        self.rnaccth = self._calc_ind_threshold(right_neg_peaks)*-1
+        laccth  = self._calc_ind_threshold(left_pos_peaks)
+        lnaccth = self._calc_ind_threshold(left_neg_peaks)*-1
+        raccth  = self._calc_ind_threshold(right_pos_peaks)
+        rnaccth = self._calc_ind_threshold(right_neg_peaks)*-1
 
-        return ([self.laccth, self.lnaccth, self.raccth, self.rnaccth])
+        return ([laccth, lnaccth, raccth, rnaccth])
 
     def _prep_row_idx(self, in_en_dts):
         if in_en_dts is not None:
@@ -247,9 +257,10 @@ class Subject():
     def _get_count(self):
         acounts = self.accmags.apply(np.sign)     # self.accmags is a DataFrame with two columns: lmag, rmag
         angvels = self._get_mag('Gyroscope', self.row_idx, 'median')      # angvels is another DataFrame with two columns
-        acounts[angvels.le(0)] = 0                          # When angular velocity value is 0, count is 0.
-        acounts.rename(columns={'lmag':'lcount', 'rmag':'rcount'}, inplace=True)
-        return(acounts)
+        acounts2 = acounts.rename(columns={'lmag':'lcount', 'rmag':'rcount'})
+        acounts2.lcount[angvels.lmag.le(0)] = 0                          # When angular velocity value is 0, count is 0.
+        acounts2.rcount[angvels.rmag.le(0)] = 0
+        return(acounts2)
 
     # Let's continue working on it over the weekend or so (10/19/22)
     def _get_Tcount(self):
@@ -261,20 +272,20 @@ class Subject():
         # Let's start with collecting all acc values that went over the threshold
         # The output of np.where would be a tuple - so take the first value
         # I do this to reduce the preprocessing time...
-        for_left_pos    = np.where(lcombined[lcombined.lcount == 1].lmag > self.laccth)[0]
-        for_right_pos   = np.where(rcombined[rcombined.rcount == 1].rmag > self.raccth)[0]
-        for_left_neg    = np.where(lcombined[lcombined.lcount == -1].lmag < self.lnaccth)[0]
-        for_right_neg   = np.where(rcombined[rcombined.rcount == -1].rmag < self.rnaccth)[0]
+        for_left_pos    = np.where((lcombined.lcount == 1.0) & (lcombined.lmag > self.laccth))[0]
+        for_right_pos   = np.where((rcombined.rcount == 1.0) & (rcombined.rmag > self.raccth))[0]
+        for_left_neg    = np.where((lcombined.lcount == -1.0) & (lcombined.lmag < self.lnaccth))[0]
+        for_right_neg   = np.where((rcombined.rcount == -1.0) & (rcombined.rmag < self.rnaccth))[0]
 
         # parameters = indices of data points that are over the threshold (over_th_array) and
         #               acounts['lmags'] or acounts['rmags']
-        def mark_Tcount(over_th_array, acounts, pos=True):
+        def mark_Tcount(over_th_array, acounts_series, pos=True):
             if pos:
                 corrsign = 1
             else:
                 corrsign = -1
-            N = acounts.shape[0]
-            M = over_th_array.shape[0]
+            N = len(acounts_series)
+            M = len(over_th_array)
             Tcount = np.zeros(N)
             for i, j in enumerate(over_th_array):
                 # "over_th_array" has the indices of the acceleration values that are over a threshold (left or right)
@@ -284,11 +295,11 @@ class Subject():
                 # If so, skip to the next index.
                 # Also, if the next index is not zero, then the current Tcount[j] is considered as a redundant count
                 #   and marked off (this is from the original MATLAB code). So we can skip such indices here.
-                if (Tcount[j] == corrsign) or ((i <= (M-2)) and (Tcount[over_th_array[i+1]] == corrsign)):
+                if (Tcount[j] == corrsign) or ((i <= (M-2)) and (Tcount[j+1] == corrsign)):
                     continue
                 else:
                     # If three consecutive data are 1 or -1, the third data point's Tcount would be 1 or -1
-                    if np.all(acounts[j:j+3] == corrsign):
+                    if np.all(acounts_series[j:j+3] == corrsign):
                         Tcount[j+2] = corrsign
                     else:
                         Tcount[j] = corrsign
@@ -299,23 +310,46 @@ class Subject():
             # Remove duplicates
             for i, j in enumerate(nonzeroTC):
                 if (i <= (L-2)) and (nonzeroTC[i+1] == (j+1)):
-                    print("Current one removed: %d" % (i))
                     Tcount[j] = 0
                 elif (i == (L-1)) and (nonzeroTC[i-1] == (j-1)):
-                    print("Last time, and the previous one removed: %d" % (i))
                     Tcount[j-1] = 0
 
             return(Tcount)
 
         # keep failing this attempt...
         #self.Tcounts = pd.DataFrame(data = dict(zip(['L', 'R'], map(partial(mark_Tcount, side=['L', 'R']), [for_left, for_right]))))
-        ltcounts  = mark_Tcount(for_left_pos, acounts, True)
-        lntcounts = mark_Tcount(for_left_neg, acounts, False)
-        rtcounts  = mark_Tcount(for_right_pos, acounts, True)
-        rntcounts = mark_Tcount(for_right_neg, acounts, False)
-        self.Tcounts = pd.DataFrame(data = {'L':ltcounts + lntcounts, 'R':rtcounts+rntcounts})
-        
-        return(self.Tcounts)
+        ltcounts  = mark_Tcount(for_left_pos, acounts['lcount'], True)
+        lntcounts = mark_Tcount(for_left_neg, acounts['lcount'], False)
+        rtcounts  = mark_Tcount(for_right_pos, acounts['rcount'], True)
+        rntcounts = mark_Tcount(for_right_neg, acounts['rcount'], False)
+        Tcounts = pd.DataFrame(data = {'L':ltcounts + lntcounts, 'R':rtcounts+rntcounts})
+
+        return(Tcounts)
+
+    def _get_mov(self):
+        Tcounts = self._get_Tcount()
+
+        def tmov(temp):
+            Tmov = np.zeros(len(temp))
+            # Among non-zero Tcount values...
+            nonzeroTC = np.where(temp != 0)[0]
+            for i, j in enumerate(nonzeroTC[:-1]):
+            # If the difference between the current point and its subsequent one
+            #   is greater than 8 data points, skip the current point.
+                if (np.diff([j, nonzeroTC[i+1]])[0] > 8) or (Tmov[j] == 1):
+                    continue
+                # If not, if the sign of the two adjacent points differ 
+                #   (-1 vs. 1 or vice versa; 0 cannot be included because points attempt
+                #        nonzeroTC cannot be 0)
+                else:
+                    if np.sign(temp[j]) != np.sign(temp[nonzeroTC[i+1]]):
+                        Tmov[nonzeroTC[i+1]] = 1
+                    else:
+                        continue
+            return(Tmov)
+
+        Tmov = Tcounts.apply(tmov, axis=0)
+        return(Tmov)
 
 # This is a function that extracts times when the sensor was eonned or doffed     
 def find_timepts_from_redcap(redcap_csv, full_id):
