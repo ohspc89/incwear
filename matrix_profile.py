@@ -1,8 +1,5 @@
 # Isn't it better if we just read it from h5 file directly???
-import sys
-import stumpy
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
 
 #sys.path.append('..')
@@ -12,10 +9,10 @@ from ReadSensorLog import *
 
 # Move to the directory where the h5 files are stored
 #   so that you can later use dir to list all filenames at once and loop around
-filename = '../PYTHON_porting/MATLAB/h5files/20200217-082740_106v1.h5'
+filename = '/home/jinseok/Downloads/20200217-082740_106v1.h5'
 
 # Before reading an individual h5 file, we need to read the csv file from REDCap.
-redcap_file = pd.read_csv('~/Documents/PYTHON_porting/MATLAB/WearableSensorsGuate_DATA_2022-09-19_0904.csv')
+redcap_file = pd.read_csv('~/Downloads/WearableSensorsGuate_DATA_2022-10-28_1019.csv')
 
 # fullid = infant_id + visit (ex. '106v1')
 fullid = filename.split('_')[-1].split('.h5')[0]
@@ -26,51 +23,51 @@ time_pts = find_timepts_from_redcap(redcap_file, fullid)
 time_pts_dt = make_start_end_datetime(time_pts, filename)
 
 # Up to this point works (Oct.18, 22)
-test = Subject(filename, time_pts_dt)                    # input: a h5 filename
+test = Subject(filename, time_pts_dt)   # input: a h5 filename (required)
+                                        #      : time_pts_dt (optional), det_option (optional, default = 'median')
+                                        # You either specify the datetimes of recording start and end
+                                        # or it will simply analyze the entire recording.
+                                        # To test another scenario, try running it without any parameter.
+                                        # You can also specify the detrending option. Default is subtracting the 'median'
+'''
+Once you generate a [Subject] object, it will contain some useful variables.
+1. accmags: a DataFrame storing the accelerometer signal norms (L/R)
+2. laccth : left accelerometer value threshold
+3. raccth : right accelerometer value threshold
+4. lnaccth: left accelerometer value negative threshold
+5. rnaccth: right accelerometer value negative threshold
+6. Tcount : counts used to define movements
+'''
 
-test.get_ind_acc_threshold()     # get_ind_acc_threshold is a function of this class: subject
-                                 #   You either specify the datetimes of recording start and end
-                                 #   or it will simply analyze the entire recording.
-                                 #   To test another scenario, try running it without any parameter.
-                                 # The order of the output is LaccTh, LnaccTh, RaccTh, RnaccTh
-out = test._get_Tcount()
-out.L
+tcount = test._get_Tcount() 
+temp = tcount.R.values
+Tmov = np.zeros(len(temp))
+nonzeroTC = np.where(temp != 0)[0]
+for i, j in enumerate(nonzeroTC[:-1]):
+    if (np.diff([j, nonzeroTC[i+1]])[0] > 8) or (Tmov[j] == 1):
+        continue
+    else:
+        if np.sign(temp[j]) != np.sign(temp[nonzeroTC[i+1]]):
+            Tmov[nonzeroTC[i+1]] = 1
+        else:
+            continue
+
+valmags = test._get_mag('Gyroscope', test.row_idx)
 acounts = test._get_count()
 
+tcount = test._get_Tcount()
 
+fig, ax = plt.subplots(1)
+ax.plot(test.accmags.lmag[134500:135500], marker='o', c = 'pink')
+ax.axhline(y=test.laccth, color = 'b', linestyle='--')
+ax.axhline(y=test.lnaccth, color = 'b', linestyle='--')
+ax.stem(np.arange(134500, 135500), tcount.L[134500:135500])
+ax.stem(np.arange(134500, 135500), test.Tmov.L[134500:135500]*2, markerfmt = '+')
 
-
-
-temp = pd.DataFrame({'hello':[1,2,3,4,5,6,7,8,9,10], 'bye':[3,3,3,3,3,3,3,3,3,3]})
-temp2 = pd.DataFrame({'hello':[1,2,3,4,5,6,7,8,9,10], 'bye':[3,3,3,3,3,3,3,3,3,3]})
-def you(df, side='L'):
-    if side == 'R':
-        print('RRRR')
-    else:
-        print('LLLL')
-    newdf = df['hello'] + 1
-    return(newdf)
-
-temp3 = pd.DataFrame(data = dict(zip(['A', 'B'], list(map(partial(you, side=['L', 'R']), [temp, temp2])))))
-temp3
-
-# Once you get the individual acceleration thresholds,
-#   you should have another attribute: accmags
-# accmags is a pandas DataFrame with two columns: 'lmag' and 'rmag'
-#   with lmag being the detrended acceleration norm values and rmag being the right-side counterpart
-test.accmags.plot()
 plt.show()
 
-# NOW you can consider doing some matrixprofile analysis
-# But just don't run it on a mac. It takes forever.
-m = 640
-mp = stumpy.stump(test.accmags['lmag'], m)
-
-########
-# almost implemented
-
-# Timepoint
-tp = test.left['Time'][0]
+plt.plot(test.accmags.lmag.values)
+plt.show()
 
 def calc_date(tp):
 # div
@@ -118,24 +115,4 @@ def make_start_end_datetime(don_doff, full_id, filename):
     else:
         doffed_dt = datetime(year, month, day, int(doffed_h), int(doffed_m), 30, 0)
     return([donned_dt, doffed_dt])
-
-in_en_dts = make_start_end_datetime(don_doff, full_id, test.filename)
-
-# Here you're getting the time difference between the start_date and donned_dt / doffed_dt
-#   in microseconds
-diffs_in_microsec = map(lambda x: x - test.calc_datetime(test.left['Time'][0]), in_en_dts)
-
-# This list will include indices of in and en
-# It seems like map objects disappear once it's used...
-indices = list(map(lambda x: round((x.seconds*1e6 + x.microseconds)/50000), diffs_in_microsec))
-
-a = test._get_mag(dtype = 'Accelerometer', row_idx = [x for x in range(indices[0], indices[1])])
-a.head
-
-# An exemple figure similar to what's produced in MATLAB
-fig, ax = plt.subplots()
-ax.set_xlim([0, test.time[len(test.time)-1]])
-ax.plot(test.time[range(indices[0], indices[1])], a)
-plt.show()
-
 
