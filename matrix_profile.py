@@ -1,6 +1,7 @@
 # Isn't it better if we just read it from h5 file directly???
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 
 #sys.path.append('..')
 # This is the script I wrote to read raw data from h5 file directly
@@ -63,11 +64,19 @@ ax.axhline(y=test.laccth, color = 'b', linestyle='--')
 ax.axhline(y=test.lnaccth, color = 'b', linestyle='--')
 ax.stem(np.arange(134500, 135500), tcount.L[134500:135500])
 ax.stem(np.arange(134500, 135500), test.Tmov.L[134500:135500]*2, markerfmt = '+')
-
 plt.show()
 
-plt.plot(test.accmags.lmag.values)
-plt.show()
+hmm = test._get_mov_kinematics()
+hmm.head()
+
+temp3 = np.nonzero(test.kinematics.R.values)[0]
+temp3
+sum(test.Tmov.R)
+
+np.where(hmm.LMovLength[134500:135500])[0]
+temp22 = hmm.LMovLength[134500:135500]
+temp22.iloc[602]
+134500+350
 
 def calc_date(tp):
 # div
