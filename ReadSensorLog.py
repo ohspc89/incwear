@@ -104,11 +104,39 @@ class Subject():
         # acceleration and gyrocscope norms
         self.accmags = self._get_mag('Accelerometer', self.row_idx, det_option)
 
+        self.count = self._get_count()
+
         # Storing the acceleration threshold values: [laccth, lnaccth, raccth, rnaccth]
         self.laccth, self.lnaccth, self.raccth, self.rnaccth = self._get_ind_acc_threshold()
 
+        # 'combined' are acc norms and count values
+        lcombined = pd.merge(self.accmags.lmag, self.count['lcount'], right_index = True, left_index = True)
+        rcombined = pd.merge(self.accmags.rmag, self.count['rcount'], right_index = True, left_index = True)
+        # 'count' could not be the column name, because that's already taken for an attribute of a dataframe.
+        self.lcombined = lcombined.rename(columns = {'lmag':'accmag', 'lcount':'counts'})
+        self.rcombined = rcombined.rename(columns = {'rmag':'accmag', 'rcount':'counts'})
+
+        # mark 1 where the acceleration norm vector element crossed either a positive or negative threshold
+        self.ValLthr_pos = (self.lcombined.counts ==  1.0) & (self.lcombined.accmag > self.laccth)
+        self.ValLthr_neg = (self.lcombined.counts == -1.0) & (self.lcombined.accmag < self.lnaccth)
+        self.ValRthr_pos = (self.rcombined.counts ==  1.0) & (self.rcombined.accmag > self.raccth)
+        self.ValRthr_neg = (self.rcombined.counts == -1.0) & (self.rcombined.accmag < self.rnaccth)
+
+        # 'thresholded' attributes would be 1: over the positive threshold, -1: under the negative threshold, 0: otherwise 
+        self.lthresholded = self.ValLthr_pos + self.ValLthr_neg * -1
+        self.rthresholded = self.ValRthr_pos + self.ValRthr_neg * -1
+
         #self.Tcount = self._get_Tcount()
+        # Tmov will be 1 if acceleration value crossed thresholds (neg or pos) two times.
         self.Tmov = self._get_mov()
+
+        # This is a dataframe with 8 columns (4 for each sensor: L/R)
+        # 1) LestMov: A vector 
+        # 2) LMovLength: A vector that stores the length of each bout. Non-zero indices will be equal to those of Tmov
+        # 3) LavepMov: A vector that stores the average of the acceleration norm per bout.
+        # 4) LpeakpMov: A vector that sotres the maximum of the acceleration norm per bout
+        # 5) RMovLength, RavepMov, RpeakpMov: Right equivalents of the first three columns
+        self.kinematics = self._raw_mov_kinematics()
 
     # This function will calculate the actual date and time from the time recorded in the sensor
     def _calc_datetime(self, x):
@@ -133,6 +161,10 @@ class Subject():
     # row_idx should be a list of two indices: user-specified array start and end
     # det_option: how are you going to [det]rend the data?
     def _get_mag(self, dtype, row_idx=None, det_option='median'):
+        if det_option not in ['median', 'customfunc']:
+            det_option='median'
+            print("Wrong detrending option provided - setting it to [median]")
+
         if row_idx is None:
             row_idx = [x for x in range(self.N)]
 
@@ -144,11 +176,10 @@ class Subject():
         # MATLAB's detrend function is not used, so we can consider that the default option
         # for detrending the data is subtracting the median
         if det_option == 'median':
-            return(mags - mags.median(axis=0))
-        elif det_option == 'customfunc':
-            return(mags.apply(detrend, axis=0))
+            out = mags - mags.median(axis=0)
         else:
-            print("Your option is either [median] or [customfunc]")
+            out = mags.apply(detrend, axis=0)   # else condition will be ['customfunc']
+        return(out)
 
     # winsize in second unit
     def _mov_avg_filt(self, winsize, pdSeries):
@@ -197,13 +228,10 @@ class Subject():
  
         #mags2 = self._get_mag('Accelerometer', self.row_idx, det_option)
         mags2 = self.accmags.copy()
-        mags2['lposthcand'] = mags2['lmag'].apply(lambda x: x if x > 0 and x < reject_th else 0)
-        mags2['lnegthcand'] = mags2['lmag'].apply(lambda x: abs(x) if x < 0 and x > -reject_th else 0)
-        mags2['rposthcand'] = mags2['rmag'].apply(lambda x: x if x > 0 and x < reject_th else 0)
-        mags2['rnegthcand'] = mags2['rmag'].apply(lambda x: abs(x) if x < 0 and x > -reject_th else 0)
-
-        # Let's make this mags2 an attribute of this class object
-        #self.accmags = mags2[['lmag', 'rmag']].copy()
+        mags2['lposthcand'] = mags2.lmag.apply(lambda x: x if x > 0 and x < reject_th else 0)
+        mags2['lnegthcand'] = mags2.lmag.apply(lambda x: abs(x) if x < 0 and x > -reject_th else 0)
+        mags2['rposthcand'] = mags2.rmag.apply(lambda x: x if x > 0 and x < reject_th else 0)
+        mags2['rnegthcand'] = mags2.rmag.apply(lambda x: abs(x) if x < 0 and x > -reject_th else 0)
 
         left_pos_peaks  = self._local_maxima(mags2.lposthcand.values, height = height)[1]
         left_neg_peaks  = self._local_maxima(mags2.lnegthcand.values, height = height)[1]
@@ -240,9 +268,9 @@ class Subject():
         if reject_th < 0:
             print(errmsg)
         else:
-            mags2 = self._get_mag('Gyroscope', 'customfunc')
-            mags2['rectlmag'] = mags2['lmag'].apply(lambda x: x if x > reject_th else 0)
-            mags2['rectrmag'] = mags2['rmag'].apply(lambda x: x if x > reject_th else 0)
+            mags2 = self._get_mag('Gyroscope', self.row_idx, 'median')
+            mags2['rectlmag'] = mags2.lmag.apply(lambda x: x if x > reject_th else 0)
+            mags2['rectrmag'] = mags2.rmag.apply(lambda x: x if x > reject_th else 0)
 
             mags2['avglmag'] = self._mov_avg_filt(winsize, mags2['rectlmag'])
             mags2['avgrmag'] = self._mov_avg_filt(winsize, mags2['rectrmag'])
@@ -255,7 +283,7 @@ class Subject():
             return([self.lavth, self.ravth])
 
     def _get_count(self):
-        acounts = self.accmags.apply(np.sign)     # self.accmags is a DataFrame with two columns: lmag, rmag
+        acounts = self.accmags.copy().apply(np.sign)     # self.accmags is a DataFrame with two columns: lmag, rmag
         angvels = self._get_mag('Gyroscope', self.row_idx, 'median')      # angvels is another DataFrame with two columns
         acounts2 = acounts.rename(columns={'lmag':'lcount', 'rmag':'rcount'})
         acounts2.lcount[angvels.lmag.le(0)] = 0                          # When angular velocity value is 0, count is 0.
@@ -264,18 +292,18 @@ class Subject():
 
     # Let's continue working on it over the weekend or so (10/19/22)
     def _get_Tcount(self):
-        # _get_count does not seem to take too much of the time. We may use it.
-        acounts = self._get_count()
-        lcombined = pd.merge(self.accmags['lmag'], acounts['lcount'], right_index = True, left_index = True)
-        rcombined = pd.merge(self.accmags['rmag'], acounts['rcount'], right_index = True, left_index = True)
 
         # Let's start with collecting all acc values that went over the threshold
         # The output of np.where would be a tuple - so take the first value
         # I do this to reduce the preprocessing time...
-        for_left_pos    = np.where((lcombined.lcount == 1.0) & (lcombined.lmag > self.laccth))[0]
-        for_right_pos   = np.where((rcombined.rcount == 1.0) & (rcombined.rmag > self.raccth))[0]
-        for_left_neg    = np.where((lcombined.lcount == -1.0) & (lcombined.lmag < self.lnaccth))[0]
-        for_right_neg   = np.where((rcombined.rcount == -1.0) & (rcombined.rmag < self.rnaccth))[0]
+        left_over_posth  = np.where(self.ValLthr_pos)[0]
+        right_over_posth = np.where(self.ValRthr_pos)[0]
+        left_under_negth = np.where(self.ValLthr_neg)[0]
+        right_under_negth = np.where(self.ValRthr_neg)[0]
+#        left_over_posth    = np.where((self.lcombined.lcount == 1.0) & (self.lcombined.lmag > self.laccth))[0]
+#        right_over_posth   = np.where((self.rcombined.rcount == 1.0) & (self.rcombined.rmag > self.raccth))[0]
+#        left_below_negth   = np.where((self.lcombined.lcount == -1.0) & (self.lcombined.lmag < self.lnaccth))[0]
+#        right_below_negth  = np.where((self.rcombined.rcount == -1.0) & (self.rcombined.rmag < self.rnaccth))[0]
 
         # parameters = indices of data points that are over the threshold (over_th_array) and
         #               acounts['lmags'] or acounts['rmags']
@@ -318,10 +346,10 @@ class Subject():
 
         # keep failing this attempt...
         #self.Tcounts = pd.DataFrame(data = dict(zip(['L', 'R'], map(partial(mark_Tcount, side=['L', 'R']), [for_left, for_right]))))
-        ltcounts  = mark_Tcount(for_left_pos, acounts['lcount'], True)
-        lntcounts = mark_Tcount(for_left_neg, acounts['lcount'], False)
-        rtcounts  = mark_Tcount(for_right_pos, acounts['rcount'], True)
-        rntcounts = mark_Tcount(for_right_neg, acounts['rcount'], False)
+        ltcounts  = mark_Tcount(left_over_posth, self.count['lcount'], True)
+        lntcounts = mark_Tcount(left_under_negth, self.count['lcount'], False)
+        rtcounts  = mark_Tcount(right_over_posth, self.count['rcount'], True)
+        rntcounts = mark_Tcount(right_under_negth, self.count['rcount'], False)
         Tcounts = pd.DataFrame(data = {'L':ltcounts + lntcounts, 'R':rtcounts+rntcounts})
 
         return(Tcounts)
@@ -350,6 +378,72 @@ class Subject():
 
         Tmov = Tcounts.apply(tmov, axis=0)
         return(Tmov)
+
+    def _raw_mov_kinematics(self):
+
+        def start_to_end(Tmov_series, thr_array, combined, side='L'):
+            Tmovidx = np.nonzero(Tmov_series)[0]        # Indices where Tmov == 1
+            lenMov  = np.zeros(combined.shape[0])       # How many data points between the start and the end of a bout?
+            avepMov = np.zeros(combined.shape[0])       # Average acceleration per Movement
+            peakpMov = np.zeros(combined.shape[0])      # Peak acceleration per Movement
+            estMov = np.zeros(combined.shape[0])        # Will be used to estimate simultaneous movements
+            if side == 'R':
+                colnames = ['RestMov', 'RMovLength', 'RavepMov', 'RpeakpMov']
+            else:
+                colnames = ['LestMov', 'LMovLength', 'LavepMov', 'LpeakpMov']
+
+            # j is the index of Tmov's. At any j, count will be -1 or 1 and not 0.
+            for j in Tmovidx:
+                k = -1              # Moving backward...
+                while True:
+                    # ... to find the data point that crossed the threshold value whose sign is
+                    # opposite to the count at j. This means that the baseline (accmag = 0) is crossed once.
+                    if np.sign(thr_array[j+k]) == -np.sign(combined['counts'][j]):
+                        movstart = j+k      # The start of a bout
+                        break
+                    else:
+                        k -= 1      # Keep going backwards if a previous attempt failed
+                l = 1               # Moving forward...
+                while True:
+                    # ... to find the data point that either touches or crosses the baseline one more time.
+                    # This time the sign of the data point at the index [j+l] could be 0 or opposite to that of
+                    # the datapoint at the index [j]
+                    if np.sign(combined['counts'][j+l]) != np.sign(combined['counts'][j]):
+                        movend = j+l        # The end of a bout
+                        break
+                    else:
+                        l += 1
+                estMov[movstart:(movend+1)] = 1
+                lenMov[j] = movend - movstart + 1
+                avepMov[j] = sum(abs(combined['accmag'][movstart:(movend+1)])) / lenMov[j]
+                peakpMov[j] = max(abs(combined['accmag'][movstart:(movend+1)]))
+
+            return(pd.DataFrame(data = dict(zip(colnames, [estMov, lenMov, avepMov, peakpMov]))))
+
+        Lkinematics = start_to_end(self.Tmov.L, self.lthresholded.copy(), self.lcombined.copy(), 'L')
+        Rkinematics = start_to_end(self.Tmov.R, self.rthresholded.copy(), self.rcombined.copy(), 'R')
+        kinematics  = pd.concat([Lkinematics, Rkinematics], axis=1)
+
+        return(kinematics)
+
+    def _mark_simultaneous(self):
+
+        # The elements of RestMov or LestMov would be either 1 during a bout and 0 otherwise
+        # Get the indices of nonzero values
+        sole_r = np.nonzero(self.kinematics.RestMov.values)[0]
+        sole_l = np.nonzero(self.kinematics.LestMov.values)[0]
+
+        # Then check if indices of sole_r are in sole_l. Those indices are the indices of simultaneous bouts
+        # Particularly, simul_rl will be a N x 2 array where the first column contains the indices of the indices
+        simul_rl = np.array(list(filter(lambda tup: tup[1] in sole_l, enumerate(sole_r))))
+        # Using the values of the first column of simul_rl, you can get the indices that truly sit inside
+        # either right alone or left alone moments of bouts
+        sole_r_T = np.delete(sole_r, simul_rl[:,0])
+        sole_l_T = np.delete(sole_l, simul_rl[:,0])
+
+        # Then you want to count how many separate simultaneous bouts are recorded.
+        # What if you just count the number of Tmov elements that are in simul_rl?
+
 
 # This is a function that extracts times when the sensor was eonned or doffed     
 def find_timepts_from_redcap(redcap_csv, full_id):
