@@ -386,7 +386,8 @@ class Subject():
             lenMov  = np.zeros(combined.shape[0])       # How many data points between the start and the end of a bout?
             avepMov = np.zeros(combined.shape[0])       # Average acceleration per Movement
             peakpMov = np.zeros(combined.shape[0])      # Peak acceleration per Movement
-            estMov = np.zeros(combined.shape[0])        # Will be used to estimate simultaneous movements
+            movstart = np.zeros(combined.shape[0])      # Will store indices of the starts of bouts
+            movend   = np.zeros(combined.shape[0])      # Will store indices of the ends of bouts
             if side == 'R':
                 colnames = ['RestMov', 'RMovLength', 'RavepMov', 'RpeakpMov']
             else:
@@ -413,7 +414,7 @@ class Subject():
                         break
                     else:
                         l += 1
-                estMov[movstart:(movend+1)] = 1
+                movstart[j] = 1
                 lenMov[j] = movend - movstart + 1
                 avepMov[j] = sum(abs(combined['accmag'][movstart:(movend+1)])) / lenMov[j]
                 peakpMov[j] = max(abs(combined['accmag'][movstart:(movend+1)]))
@@ -427,6 +428,20 @@ class Subject():
         return(kinematics)
 
     def _mark_simultaneous(self):
+
+        '''
+        We need to re-evaluate how we operationalize simultaneity of bouts.
+        Let's suppose that at the index j, Tmov.L[j] = 1
+        If the following three conditions are all true for another index k:
+          1) Tmov.R[k] = 1                  (right leg bout)
+          2) RestMov[(k-n):(k+m+1)] = 1     (duration of that bout)
+          3) k-n =< j <= k+m                (left leg bout located inside the duration of the right leg bout)
+        we can argue that the bout of the left leg at the index j occurred 
+        in the vicinity of the bout of the right leg at the index k.
+        Consequently, we could label these movements as "simultaneous".
+        A simple overlap of RestMov and LestMov values is not enough to mark "simultaneous" moves.
+        For example, what if there's only one datapoint overlap - is that still a simultaneous move?
+        '''
 
         # The elements of RestMov or LestMov would be either 1 during a bout and 0 otherwise
         # Get the indices of nonzero values
