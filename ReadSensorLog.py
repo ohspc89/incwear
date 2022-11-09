@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 
 '''
 Written by Jinseok Oh, Ph.D.
-2022/9/13
+2022/9/13 - 2022/11/21
 
 ReadSensorLog.py is a python script porting MakeDataStructure_v2.m,
 a file prepared to extract data from APDM OPAL V2 sensors.
@@ -130,12 +130,14 @@ class Subject():
         # Tmov will be 1 if acceleration value crossed thresholds (neg or pos) two times.
         self.Tmov = self._get_mov()
 
-        # This is a dataframe with 8 columns (4 for each sensor: L/R)
-        # 1) LestMov: A vector 
-        # 2) LMovLength: A vector that stores the length of each bout. Non-zero indices will be equal to those of Tmov
-        # 3) LavepMov: A vector that stores the average of the acceleration norm per bout.
-        # 4) LpeakpMov: A vector that sotres the maximum of the acceleration norm per bout
-        # 5) RMovLength, RavepMov, RpeakpMov: Right equivalents of the first three columns
+        # This is a dictionary with 2 keys ("Lkinematics", "Rkinematics")
+        # Each key will have a corresponding dictionary as its value
+        # 1) LMovstart : A vector storing indices of the start of a bout
+        # 2) LMovend   : A vector storing indices of the end of a bout
+        # 3) LMovLength: A vector that stores the length of each bout. Non-zero indices will be equal to those of Tmov
+        # 4) LavepMov  : A vector that stores the average of the acceleration norm per bout.
+        # 5) LpeakpMov : A vector that sotres the maximum of the acceleration norm per bout
+        # 6) RMovLength, RavepMov, RpeakpMov: Right equivalents of the first three columns
         self.kinematics = self._raw_mov_kinematics()
 
     # This function will calculate the actual date and time from the time recorded in the sensor
@@ -300,10 +302,6 @@ class Subject():
         right_over_posth = np.where(self.ValRthr_pos)[0]
         left_under_negth = np.where(self.ValLthr_neg)[0]
         right_under_negth = np.where(self.ValRthr_neg)[0]
-#        left_over_posth    = np.where((self.lcombined.lcount == 1.0) & (self.lcombined.lmag > self.laccth))[0]
-#        right_over_posth   = np.where((self.rcombined.rcount == 1.0) & (self.rcombined.rmag > self.raccth))[0]
-#        left_below_negth   = np.where((self.lcombined.lcount == -1.0) & (self.lcombined.lmag < self.lnaccth))[0]
-#        right_below_negth  = np.where((self.rcombined.rcount == -1.0) & (self.rcombined.rmag < self.rnaccth))[0]
 
         # parameters = indices of data points that are over the threshold (over_th_array) and
         #               acounts['lmags'] or acounts['rmags']
@@ -359,8 +357,8 @@ class Subject():
 
         def tmov(temp):
             Tmov = np.zeros(len(temp))
-            # Among non-zero Tcount values...
-            nonzeroTC = np.where(temp != 0)[0]
+            # Among non-zero Tcount (-1 or 1) values...
+            nonzeroTC = np.where(temp!=0)[0]
             for i, j in enumerate(nonzeroTC[:-1]):
             # If the difference between the current point and its subsequent one
             #   is greater than 8 data points, skip the current point.
@@ -382,25 +380,26 @@ class Subject():
     def _raw_mov_kinematics(self):
 
         def start_to_end(Tmov_series, thr_array, combined, side='L'):
-            Tmovidx = np.nonzero(Tmov_series)[0]        # Indices where Tmov == 1
-            lenMov  = np.zeros(combined.shape[0])       # How many data points between the start and the end of a bout?
-            avepMov = np.zeros(combined.shape[0])       # Average acceleration per Movement
-            peakpMov = np.zeros(combined.shape[0])      # Peak acceleration per Movement
-            movstart = np.zeros(combined.shape[0])      # Will store indices of the starts of bouts
-            movend   = np.zeros(combined.shape[0])      # Will store indices of the ends of bouts
+            Tmovidx = np.nonzero(Tmov_series.values)[0]        # Indices where Tmov == 1
+            N = len(Tmovidx)                            # This number is what we need
+            lenMov  = np.zeros(N)       # How many data points between the start and the end of a bout?
+            avepMov = np.zeros(N)       # Average acceleration per Movement
+            peakpMov = np.zeros(N)      # Peak acceleration per Movement
+            movstart = np.zeros(N)      # Will store indices of the starts of bouts
+            movend   = np.zeros(N)      # Will store indices of the ends of bouts
             if side == 'R':
-                colnames = ['RestMov', 'RMovLength', 'RavepMov', 'RpeakpMov']
+                colnames = ['RMovIdx', 'RMovStart', 'RMovEnd', 'RMovLength', 'RavepMov', 'RpeakpMov']
             else:
-                colnames = ['LestMov', 'LMovLength', 'LavepMov', 'LpeakpMov']
+                colnames = ['LMovIdx', 'LMovStart', 'LMovEnd', 'LMovLength', 'LavepMov', 'LpeakpMov']
 
             # j is the index of Tmov's. At any j, count will be -1 or 1 and not 0.
-            for j in Tmovidx:
+            for i, j in enumerate(Tmovidx):
                 k = -1              # Moving backward...
                 while True:
                     # ... to find the data point that crossed the threshold value whose sign is
                     # opposite to the count at j. This means that the baseline (accmag = 0) is crossed once.
                     if np.sign(thr_array[j+k]) == -np.sign(combined['counts'][j]):
-                        movstart = j+k      # The start of a bout
+                        movstartidx = int(j+k)      # The start of a bout
                         break
                     else:
                         k -= 1      # Keep going backwards if a previous attempt failed
@@ -410,20 +409,22 @@ class Subject():
                     # This time the sign of the data point at the index [j+l] could be 0 or opposite to that of
                     # the datapoint at the index [j]
                     if np.sign(combined['counts'][j+l]) != np.sign(combined['counts'][j]):
-                        movend = j+l        # The end of a bout
+                        movendidx = int(j+l)       # The end of a bout
                         break
                     else:
                         l += 1
-                movstart[j] = 1
-                lenMov[j] = movend - movstart + 1
-                avepMov[j] = sum(abs(combined['accmag'][movstart:(movend+1)])) / lenMov[j]
-                peakpMov[j] = max(abs(combined['accmag'][movstart:(movend+1)]))
+                movstart[i] = movstartidx
+                movend[i] = movendidx
+                lenMov[i] = movendidx - movstartidx + 1
+                avepMov[i] = sum(abs(combined.accmag[movstartidx:(movendidx+1)])) / lenMov[i]
+                peakpMov[i] = max(abs(combined.accmag[movstartidx:(movendidx+1)]))
 
-            return(pd.DataFrame(data = dict(zip(colnames, [estMov, lenMov, avepMov, peakpMov]))))
+            return(dict(zip(colnames, [Tmovidx, movstart, movend, lenMov, avepMov, peakpMov])))
 
         Lkinematics = start_to_end(self.Tmov.L, self.lthresholded.copy(), self.lcombined.copy(), 'L')
         Rkinematics = start_to_end(self.Tmov.R, self.rthresholded.copy(), self.rcombined.copy(), 'R')
-        kinematics  = pd.concat([Lkinematics, Rkinematics], axis=1)
+        # Lkinematics and Rkinematics could differ in length - so better return a dictionary.
+        kinematics  = {'Lkinematics':Lkinematics, 'Rkinematics':Rkinematics}
 
         return(kinematics)
 
@@ -439,26 +440,52 @@ class Subject():
         we can argue that the bout of the left leg at the index j occurred 
         in the vicinity of the bout of the right leg at the index k.
         Consequently, we could label these movements as "simultaneous".
-        A simple overlap of RestMov and LestMov values is not enough to mark "simultaneous" moves.
-        For example, what if there's only one datapoint overlap - is that still a simultaneous move?
+        Simultaneous will be further specified to two cases.
+            1) Bilateral Synchronous: starting points of RestMov and LestMov are exactly the same
+            2) Bilateral Asynchronous: starting points don't match, but they overlap
         '''
 
-        # The elements of RestMov or LestMov would be either 1 during a bout and 0 otherwise
-        # Get the indices of nonzero values
-        sole_r = np.nonzero(self.kinematics.RestMov.values)[0]
-        sole_l = np.nonzero(self.kinematics.LestMov.values)[0]
+        r_dict = self.kinematics['Rkinematics'].copy()
+        l_dict = self.kinematics['Lkinematics'].copy()
 
-        # Then check if indices of sole_r are in sole_l. Those indices are the indices of simultaneous bouts
-        # Particularly, simul_rl will be a N x 2 array where the first column contains the indices of the indices
-        simul_rl = np.array(list(filter(lambda tup: tup[1] in sole_l, enumerate(sole_r))))
-        # Using the values of the first column of simul_rl, you can get the indices that truly sit inside
-        # either right alone or left alone moments of bouts
-        sole_r_T = np.delete(sole_r, simul_rl[:,0])
-        sole_l_T = np.delete(sole_l, simul_rl[:,0])
+        # sole_r and sole_l will each show the indices of nonzero RTmov and LTmov elements
+        # In other words, locations of bouts
+        sole_r = pd.DataFrame(data = {'MovIdx':r_dict['RMovIdx'], 'Start':r_dict['RMovStart'], 'End': r_dict['RMovEnd']})
+        sole_l = pd.DataFrame(data = {'MovIdx':l_dict['LMovIdx'], 'Start':l_dict['LMovStart'], 'End': l_dict['LMovEnd']})
 
-        # Then you want to count how many separate simultaneous bouts are recorded.
-        # What if you just count the number of Tmov elements that are in simul_rl?
+        # If RStart is equal to Lstart, the corresponding RMovIdx is
+        # bilateral synchronous to the LMovIdx associated with the LStart
+        # If RStart is not equal, but RMovIdx is in between LMovStart and LMovEnd,
+        # then it's bilateral asynchronous
 
+        def match_idx(sole_1, sole_2, refside = 'R'):
+            bilatSyncidx = {}
+            bilatAsyncidx = {}
+            bilatTotal = {}
+            if refside == 'L':
+                keys = ['LStart', 'RStart']
+            else:
+                keys = ['RStart', 'LStart']
+            for i, mov in enumerate(sole_1.MovIdx):
+                for j in range(sole_2.shape[0]):
+                    if (mov > sole_2.Start[j]) and (mov < sole_2.End[j]):
+                        bilatTotal[mov] = i
+                        if sole_1.Start[i] == sole_2.Start[j]:
+                            # You're storing the row indices of LStart and RStart
+                            # This is for the ease of later processing of sole_r and sole_l
+                            bilatSyncidx[mov] = {x:y for x, y in zip(keys, [i,j])}
+                            break
+                        else:
+                            bilatAsyncidx[mov] = {x:y for x, y in zip(keys, [i,j])}
+                            break
+            return({'Sync':bilatSyncidx, 'Async':bilatAsyncidx, 'Total':bilatTotal})
+
+        # still takes quite a long time...need to make it more efficient
+        bilat_r = match_idx(sole_r, sole_l)
+        bilat_l = match_idx(sole_l, sole_r, 'L')
+
+        # Return information about simultaneous moves
+        return({'RSim':bilat_r, 'LSim':bilat_l})
 
 # This is a function that extracts times when the sensor was eonned or doffed     
 def find_timepts_from_redcap(redcap_csv, full_id):
