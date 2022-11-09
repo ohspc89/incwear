@@ -1,6 +1,7 @@
 # Isn't it better if we just read it from h5 file directly???
 import pandas as pd
 import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib.patches import Rectangle
 
 #sys.path.append('..')
@@ -37,46 +38,90 @@ Once you generate a [Subject] object, it will contain some useful variables.
 3. raccth : right accelerometer value threshold
 4. lnaccth: left accelerometer value negative threshold
 5. rnaccth: right accelerometer value negative threshold
-6. Tcount : counts used to define movements
+6. Tmov : counts that correspond to full movements
 '''
-
-tcount = test._get_Tcount() 
-temp = tcount.R.values
-Tmov = np.zeros(len(temp))
-nonzeroTC = np.where(temp != 0)[0]
-for i, j in enumerate(nonzeroTC[:-1]):
-    if (np.diff([j, nonzeroTC[i+1]])[0] > 8) or (Tmov[j] == 1):
-        continue
-    else:
-        if np.sign(temp[j]) != np.sign(temp[nonzeroTC[i+1]]):
-            Tmov[nonzeroTC[i+1]] = 1
-        else:
-            continue
-
-valmags = test._get_mag('Gyroscope', test.row_idx)
-acounts = test._get_count()
 
 tcount = test._get_Tcount()
 
-fig, ax = plt.subplots(1)
-ax.plot(test.accmags.lmag[134500:135500], marker='o', c = 'pink')
-ax.axhline(y=test.laccth, color = 'b', linestyle='--')
-ax.axhline(y=test.lnaccth, color = 'b', linestyle='--')
-ax.stem(np.arange(134500, 135500), tcount.L[134500:135500])
-ax.stem(np.arange(134500, 135500), test.Tmov.L[134500:135500]*2, markerfmt = '+')
+a = 137800
+b = 137900
+fig, ax = plt.subplots(2)
+ax[0].plot(test.accmags.lmag[a:b], marker='o', c = 'pink')
+ax[0].axhline(y=test.laccth, color = 'b', linestyle='--')
+ax[0].axhline(y=test.lnaccth, color = 'b', linestyle='--')
+#ax[0].stem(np.arange(a, b), tcount.L[a:b])
+ax[0].stem(np.arange(a, b), test.Tmov.L[a:b]*2, markerfmt = '+')
+rect1 = Rectangle((137839, 0), width=3, height=1, ec='g', fc='none', lw=2)
+rect2 = Rectangle((137845, 0), width=5, height=1, ec='g', fc='none', lw=2)
+ax[0].add_patch(rect1)
+ax[0].add_patch(rect2)
+ax[1].plot(test.accmags.rmag[a:b], marker='o', c='pink')
+ax[1].axhline(y=test.raccth, color = 'b', linestyle='--')
+ax[1].axhline(y=test.rnaccth, color = 'b', linestyle='--')
+#ax[1].stem(np.arange(a, b), tcount.R[a:b])
+ax[1].stem(np.arange(a, b), test.Tmov.R[a:b]*2, markerfmt = '+')
+rect1 = Rectangle((137845, 0), width=4, height=1, ec='g', fc='none', lw=2)
+rect2 = Rectangle((137839, 0), width=5, height=1, ec='g', fc='none', lw=2)
+ax[1].add_patch(rect1)
+ax[1].add_patch(rect2)
 plt.show()
 
-hmm = test._get_mov_kinematics()
-hmm.head()
+test.kinematics['Rkinematics']['RavepMov']
+test.kinematics['Lkinematics']['LavepMov']
 
-temp3 = np.nonzero(test.kinematics.R.values)[0]
+r_dict = test.kinematics['Rkinematics'].copy()
+l_dict = test.kinematics['Lkinematics'].copy()
+
+# 137847
+r_dict['RMovStart'][47]
+r_dict['RMovStart'][48]
+r_dict['RMovEnd'][48]
+l_dict['LMovStart'][77]
+l_dict['LMovEnd'][77]
+
+r_dict['RMovStart'][46]
+l_dict['LMovStart'][76]
+
+sole_r = pd.DataFrame(data = {'RMovIdx':r_dict['RMovIdx']})
+sole_l = pd.DataFrame(data = {'LMovIdx':l_dict['LMovIdx']})
+
+sole_r['range'] = list(np.arange(int(x), int(y)) for x, y in zip(r_dict['RMovStart'], r_dict['RMovEnd']))
+sole_l['range'] = list(np.arange(int(x), int(y)) for x, y in zip(l_dict['LMovStart'], l_dict['LMovEnd']))
+
+set(sole_r.range)
+
+import time
+tic = time.perf_counter()
+simul_rl = np.array(list(filter(lambda tup: tup in np.concatenate(sole_l.range), sole_r.RMovIdx)))
+toc = time.perf_counter()
+toc-tic
+simul_lr = np.array(list(filter(lambda tup: tup in np.concatenate(sole_r.range), sole_l.LMovIdx)))
+simul_lr
+
+np.intersect1d(simul_rl, simul_lr)
+sole_r.range
+
+simul_rl[10]
+len(simul_rl)
+len(sole_r.range)
+[tup for tup in sole_r.RMovIdx if tup in sole_l.range]
+sole_r.RMovIdx[:-20]
+sole_l.range
+
+out = test._mark_simultaneous()
+out
+list(zip(test.kinematics.RMovStart, test.kinematics.RMovEnd))
+
+temp3 = np.nonzero(test.kinematics.RMovIdx.values)[0]
 temp3
 sum(test.Tmov.R)
 
-np.where(hmm.LMovLength[134500:135500])[0]
-temp22 = hmm.LMovLength[134500:135500]
-temp22.iloc[602]
-134500+350
+Tmovidx = np.nonzero(test.Tmov.L.values)[0]
+len(Tmovidx)
+len(test.kinematics.LMovIdx.values)
+test.kinematics.LMovIdx.values
+len(test.Tmov.L.values)
+
 
 def calc_date(tp):
 # div
