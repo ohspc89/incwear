@@ -11,18 +11,14 @@ from ReadSensorLog import *
 
 # Move to the directory where the h5 files are stored
 #   so that you can later use dir to list all filenames at once and loop around
-filename = '/home/jinseok/Downloads/20200217-082740_106v1.h5'
+filename = '/Users/joh/Documents/PYTHON_porting/MATLAB/h5files/20201111-113232_117v1.h5'
 
 # Before reading an individual h5 file, we need to read the csv file from REDCap.
-redcap_file = pd.read_csv('~/Downloads/WearableSensorsGuate_DATA_2022-10-28_1019.csv')
+redcap_file = pd.read_csv('~/Downloads/mixed_bag.csv')
 
-# fullid = infant_id + visit (ex. '106v1')
-fullid = filename.split('_')[-1].split('.h5')[0]
-# time_pts will be the recording start and end times (ex. '10:23', '22:42')
-time_pts = find_timepts_from_redcap(redcap_file, fullid)
 # time_pts_dt will be in the datetime format
-#   (ex. datetime(2020, 2, 17, 10, 23, 00))
-time_pts_dt = make_start_end_datetime(time_pts, filename)
+#   (ex. datetime(2020, 2, 17, 10, 23, 00, tzinfo=datetime.timezone.utc))
+time_pts_dt = make_start_end_datetime(redcap_file, filename, 'America/Guatemala')
 
 # Up to this point works (Oct.18, 22)
 test = Subject(filename, time_pts_dt)   # input: a h5 filename (required)
@@ -42,6 +38,7 @@ Once you generate a [Subject] object, it will contain some useful variables.
 '''
 
 tcount = test._get_Tcount()
+Tmov = test._get_mov()
 
 a = 137800
 b = 137900
