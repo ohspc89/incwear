@@ -2,21 +2,21 @@
 HDF stands for [Hierarchical Data Format]. Every object in an HDF5 file has a name,
 and they're arranged in a POSIX-style hierarchy with / separators
 '''
-
 import h5py
 import numpy as np
 import pandas as pd
+import re
 from functools import partial
 import matplotlib.pyplot as plt
 from scipy.signal import find_peaks, detrend
-from datetime import datetime, timedelta
-
+from datetime import datetime, timedelta, timezone
+import pytz
 '''
 Written by Jinseok Oh, Ph.D.
-2022/9/13 - 2022/11/21
+2022/9/13 - present (as of 2022/12/6)
 
 ReadSensorLog.py is a python script porting MakeDataStructure_v2.m,
-a file prepared to extract data from APDM OPAL V2 sensors.
+    a file prepared to extract data from APDM OPAL V2 sensors.
 
 A data file in h5 format would have three Level-1 names:
     - Annotations
@@ -37,35 +37,42 @@ Original script exports the following values:
     - id ['Sensors' - 'Name']
     - iButtonPressed ['Annotations']
 
-Class Subject will try to have all those values, particularly those used in the actual analysis.
-However, not in the exact format. For example, if 'Annotations' is saved as an attribute: 'annots',
-then a user can access its sub-attribute, such as caseID [well but it's not used anyways...]
+Class Subject will try to have all those values, 
+    particularly those used in the actual analysis.
+However, not in the exact format. 
+For example, if 'Annotations' is saved as an attribute: 'annots',
+    then a user can access its sub-attribute, such as caseID 
+[well but it's not used anyways...]
 '''
-#filename = './MATLAB/h5files/20200217-082740_106v1.h5'
+#filename = '/Users/joh/Downloads/20220322-084542_LL020_M2_D2.h5'
 class Subject():
 
     # Make the default detrend option to median. Another option is 'customfunc'.
     def __init__(self, filename, in_en_dts, det_option = 'median'):
-        # Read the HDF5 file
+
         f = h5py.File(filename, 'r')
 
         # Save the file name
         self.filename = filename
 
-        # 'Annotations' comprises three columns: Time, Case ID, annotation in spanish
+        # Annotations comprises three columns: Time, Case ID, annotation
         # Time in epoch microseconds... what does this mean?
         self.annots = f['Annotations']
         
-        # 'Sensors' has TWO members.
-        # Each subgroup will have a name in the format of XI-XXXXXX. The number after the dash is the Case ID.
-        # This study used two sensors during a recording, so there will be two subgrops.
+        '''
+        'Sensors' has TWO members.
+        Each subgroup will have a name in the format of XI-XXXXXX. 
+        The number after the dash is the Case ID.
+        This study used two sensors during a recording, 
+            so there will be two subgrops.
+        '''
         self.sensors = f['Sensors']
         self.sensorids = list(self.sensors.keys())
 
         # To determine which sensor was attached to the left foot
         leftidx = 0
         whichfoot = self.sensors[self.sensorids[leftidx]]['Configuration']['Config Strings'][0][2].decode()
-        if 'derecho' in whichfoot:
+        if ('derecho' in whichfoot) or ('right' in whichfoot.lower()):
             rightidx = 0
             leftidx = 1
         else:
@@ -78,19 +85,15 @@ class Subject():
         self.left = self.sensors[self.sensorids[leftidx]]
         self.right = self.sensors[self.sensorids[rightidx]]
 
-        # How many datapoints?
-        self.N = self.left['Accelerometer'].shape[0]
+        self.N = self.left['Accelerometer'].shape[0] # Num of datapoints
 
-        # 1 data point every 50000μs or 0.05s
-        self.T = 0.05
-        # sfreq will be equal to Sample rate.
-        self.sfreq = int(1/self.T)
+        self.T = 0.05 # 1 data point every 50000μs or 0.05s
+        self.sfreq = int(1/self.T) # sampling frequency.
 
-        # Recorded timepoints - may not use, but just in case
+        # Recorded timepoints in UTC!
         self.rtime = map(self._calc_datetime, self.left['Time'])
 
-        # 'Processed' - the orientation in quarternion
-        self.procs = f['Processed']
+        self.procs = f['Processed'] # the orientation in quarternion
         self.ori_left = self.procs[self.sensorids[leftidx]]['Orientation']
         self.ori_right = self.procs[self.sensorids[rightidx]]['Orientation']
 
@@ -98,11 +101,14 @@ class Subject():
         # This may be used later for plotting
         self.time = (self.left['Time'] - self.left['Time'][0])/1e6
 
-        # Let's put in the index with the recording start time(in) and the end time(en) compensated
+        # Index with the recording start time(in) and the end time(en)
+        # Note that in_en_dts are given in UTC as well
         self.row_idx = self._prep_row_idx(in_en_dts)
 
         # acceleration and gyrocscope norms
-        self.accmags = self._get_mag('Accelerometer', self.row_idx, det_option)
+        self.accmags = self._get_mag('Accelerometer', 
+                                     self.row_idx, 
+                                     det_option)
 
         self.count = self._get_count()
 
@@ -142,21 +148,11 @@ class Subject():
 
     # This function will calculate the actual date and time from the time recorded in the sensor
     def _calc_datetime(self, x):
-        tOffset = -6                            # Guatemala: UTC-6 (No Daylight Savings Time)
-        div = 24*3600*1e6
-        div2 = 3600*1e6
-        d_days = x // div                       # How many days have passed since (1970, 1, 1, UTC)
-        rem1 = x % div                          # Remainder in microseconds
-        d_hrs = (rem1 // div2) + tOffset        # Hours
-        rem2 = rem1 % div2
-        d_mins = rem2 // (60*1e6)               # Minutes
-        rem3 = rem2 % (60*1e6)
-        d_secs = rem3 // 1e6                    # Seconds
-
-        # So whatever value from the sensor is the time passed from Jan 1, 1970 UTC in microseconds
-        # This function returns the datetime up to seconds
-        record_start_time = datetime(1970, 1, 1, 0, 0, 0) + timedelta(days = d_days, seconds = d_secs,\
-                minutes = d_mins, hours = d_hrs, microseconds = rem3 % 1e6)
+        '''
+        [x] is a timestamp in units of microseconds
+            since 0:00, Jan 1, 1970 UTC (source: APDM_DevelopersGuide)
+        '''
+        record_start_time = datetime.fromtimestamp(x/1e6, timezone.utc)
         return (record_start_time)
 
     # dtype argument should be either 'Accelerometer' or 'Gyroscope'
@@ -248,14 +244,42 @@ class Subject():
         return ([laccth, lnaccth, raccth, rnaccth])
 
     def _prep_row_idx(self, in_en_dts):
-        if in_en_dts is not None:
-            # Getting the time differences:
-            # 1) start_datetime - donned_datetime
-            # 2) start_datetime - doffed_datetime
-            diffs_in_microsec = map(lambda x: x - self._calc_datetime(self.left['Time'][0]), in_en_dts)
 
-            # This list will include indices of the recording start time (in) and the recording end time (en).
-            indices = list(map(lambda x: round((x.seconds*1e6 + x.microseconds)/50000), diffs_in_microsec))
+        if in_en_dts is not None:
+            d_in_microsec = list(map(
+                lambda x: x - self._calc_datetime(self.left['Time'][0]), in_en_dts))
+            '''
+            d_in_microsec is the list of TWO datetime.timedelta objects
+            The first element of this list shows the time difference between 
+                the start of the time recorded in sensors and don_t.
+            The second element is the analogous for doff_t.
+            The sampling frequency of the APDM OPAL sensor is 20Hz,
+                so each data point is 1/20 seconds or 5e4 microseconds.
+            Therefore, if the time difference is represented in the
+                microseconds unit and divided by 50000 (with a bit of
+                rounding) you get how many data points don_t and doff_t
+                are away from the index 0.
+            Consequently, two indices will be searched:
+                1) startidx = data index that corresponds to the don_t
+                2) endidx = data index that corresponds to the doff_t.
+                    For this one, there are occasions where the 
+                    REDCap reports are 'inaccurate', meaning that the 
+                    sensors were turned off long before the reported 
+                    doff_t and this exception needs to be handled by 
+                    simply taking the last value of the time series
+            '''
+            C = 1e6 # conversion constant: 1 second = 1e6 microseconds
+            N = self.T * 1e6    # 50000.0
+            poten = round((d_in_microsec[1].seconds*C
+                           + d_in_microsec[1].microseconds)/N)
+            if poten < self.left['Time'].shape[0]:
+                indices = list(map(
+                    lambda x: round((x.seconds*C + x.microseconds)/N), d_in_microsec))
+            else: 
+                indices = list()
+                indices.extend([round((d_in_microsec.seconds*C
+                                      + d_in_microsec.microseconds)/N),
+                                self.left['Time'].shape[0]-1])
 
             # This will be one input to self._get_mag
             row_idx = [x for x in range(indices[0], indices[1])]
@@ -314,17 +338,25 @@ class Subject():
             M = len(over_th_array)
             Tcount = np.zeros(N)
             for i, j in enumerate(over_th_array):
-                # "over_th_array" has the indices of the acceleration values that are over a threshold (left or right)
-                # [j] gives one of those indices while [i] indicates the order of [j] in "over_th_array".
-                # It could be that the Tcount value at the current index may have been set
-                #   by the previous index (ex. [j-2] satisfied the "else" condition so Tcount[j] = 1 or -1
-                # If so, skip to the next index.
-                # Also, if the next index is not zero, then the current Tcount[j] is considered as a redundant count
-                #   and marked off (this is from the original MATLAB code). So we can skip such indices here.
+                '''
+                "over_th_array" has the indices of the acceleration values 
+                    that are over a threshold (left or right).
+                [j] gives one of those indices while [i] indicates 
+                    the order of [j] in "over_th_array".
+                It could be that the Tcount value at the current index 
+                    may have been set by the previous index 
+                    (ex. [j-2] satisfied the "else" condition so Tcount[j] = 1 or -1)
+                If so, skip to the next index.
+                Also, if the next index is not zero, then the current 
+                    Tcount[j] is considered as a redundant count and 
+                    marked off (this is from the original MATLAB code). 
+                    So we can skip such indices here.
+                '''
                 if (Tcount[j] == corrsign) or ((i <= (M-2)) and (Tcount[j+1] == corrsign)):
                     continue
                 else:
-                    # If three consecutive data are 1 or -1, the third data point's Tcount would be 1 or -1
+                    # If three consecutive data are 1 or -1, 
+                    #   the third data point's Tcount would be 1 or -1
                     if np.all(acounts_series[j:j+3] == corrsign):
                         Tcount[j+2] = corrsign
                     else:
@@ -348,7 +380,8 @@ class Subject():
         lntcounts = mark_Tcount(left_under_negth, self.count['lcount'], False)
         rtcounts  = mark_Tcount(right_over_posth, self.count['rcount'], True)
         rntcounts = mark_Tcount(right_under_negth, self.count['rcount'], False)
-        Tcounts = pd.DataFrame(data = {'L':ltcounts + lntcounts, 'R':rtcounts+rntcounts})
+        Tcounts = pd.DataFrame(data = {'L':ltcounts + lntcounts, 
+                                       'R':rtcounts+rntcounts})
 
         return(Tcounts)
 
@@ -360,13 +393,14 @@ class Subject():
             # Among non-zero Tcount (-1 or 1) values...
             nonzeroTC = np.where(temp!=0)[0]
             for i, j in enumerate(nonzeroTC[:-1]):
-            # If the difference between the current point and its subsequent one
-            #   is greater than 8 data points, skip the current point.
+            # If the difference between the current point and 
+            #   its subsequent one is greater than 8 data points, 
+            #   skip the current point.
                 if (np.diff([j, nonzeroTC[i+1]])[0] > 8) or (Tmov[j] == 1):
                     continue
                 # If not, if the sign of the two adjacent points differ 
-                #   (-1 vs. 1 or vice versa; 0 cannot be included because points attempt
-                #        nonzeroTC cannot be 0)
+                #   (-1 vs. 1 or vice versa; 0 cannot be included because 
+                #   points attempt nonzeroTC cannot be 0)
                 else:
                     if np.sign(temp[j]) != np.sign(temp[nonzeroTC[i+1]]):
                         Tmov[nonzeroTC[i+1]] = 1
@@ -388,16 +422,28 @@ class Subject():
             movstart = np.zeros(N)      # Will store indices of the starts of bouts
             movend   = np.zeros(N)      # Will store indices of the ends of bouts
             if side == 'R':
-                colnames = ['RMovIdx', 'RMovStart', 'RMovEnd', 'RMovLength', 'RavepMov', 'RpeakpMov']
+                colnames = ['RMovIdx', 
+                            'RMovStart', 
+                            'RMovEnd', 
+                            'RMovLength', 
+                            'RavepMov', 
+                            'RpeakpMov']
             else:
-                colnames = ['LMovIdx', 'LMovStart', 'LMovEnd', 'LMovLength', 'LavepMov', 'LpeakpMov']
+                colnames = ['LMovIdx', 
+                            'LMovStart', 
+                            'LMovEnd', 
+                            'LMovLength', 
+                            'LavepMov', 
+                            'LpeakpMov']
 
-            # j is the index of Tmov's. At any j, count will be -1 or 1 and not 0.
+            # j is the index of Tmov's. 
+            # At any j, count will be -1 or 1 and not 0.
             for i, j in enumerate(Tmovidx):
                 k = -1              # Moving backward...
                 while True:
-                    # ... to find the data point that crossed the threshold value whose sign is
-                    # opposite to the count at j. This means that the baseline (accmag = 0) is crossed once.
+                    # ... to find the data point that crossed the threshold value 
+                    #   whose sign is opposite to the count at j. This means that 
+                    #   the baseline (accmag = 0) is crossed once.
                     if np.sign(thr_array[j+k]) == -np.sign(combined['counts'][j]):
                         movstartidx = int(j+k)      # The start of a bout
                         break
@@ -450,8 +496,12 @@ class Subject():
 
         # sole_r and sole_l will each show the indices of nonzero RTmov and LTmov elements
         # In other words, locations of bouts
-        sole_r = pd.DataFrame(data = {'MovIdx':r_dict['RMovIdx'], 'Start':r_dict['RMovStart'], 'End': r_dict['RMovEnd']})
-        sole_l = pd.DataFrame(data = {'MovIdx':l_dict['LMovIdx'], 'Start':l_dict['LMovStart'], 'End': l_dict['LMovEnd']})
+        sole_r = pd.DataFrame(data = {'MovIdx':r_dict['RMovIdx'], 
+                                      'Start':r_dict['RMovStart'], 
+                                      'End': r_dict['RMovEnd']})
+        sole_l = pd.DataFrame(data = {'MovIdx':l_dict['LMovIdx'], 
+                                      'Start':l_dict['LMovStart'], 
+                                      'End': l_dict['LMovEnd']})
 
         # If RStart is equal to Lstart, the corresponding RMovIdx is
         # bilateral synchronous to the LMovIdx associated with the LStart
@@ -487,31 +537,85 @@ class Subject():
         # Return information about simultaneous moves
         return({'RSim':bilat_r, 'LSim':bilat_l})
 
-# This is a function that extracts times when the sensor was eonned or doffed     
-def find_timepts_from_redcap(redcap_csv, full_id):
-    # full_id will be in the format: "@@@v$" where @@@ is the infant id and $ is the number of visit
-    # times will be the sensor donned and doffed times, based on the full_id
-    infant_id, visit = full_id.split('v')
-    times = redcap_csv[(redcap_csv.study_id == int(infant_id)) & (redcap_csv.visit == int(visit))][['time_donned', 'time_doffed']]
-    return(times.values[0])
+def make_start_end_datetime(redcap_csv, filename, site):
+    '''
+    A filename (if we're living in an ideal world) is in the format:
+        '/Some path/YYYYmmdd-HHMMSS_[participant identifier].h5'
+    Use the .h5 filename -> search times sensors were donned and doffed
+    A redcap_csv will be in the following format (example below)
 
-# Prepare the datetime objects based on 
-#   donned and doffed times provided as an input
-def make_start_end_datetime(don_and_doff, filename):
-    # Getting year, month, and day from the filename
-    temp = filename.split('/')[-1].split('-')[0]
-    year    = int(temp[0:4])
-    month   = int(temp[4:6])
-    day     = int(temp[6:8])
-    # Split hour and minute
-    donned_h, donned_m = don_and_doff[0].split(":")
-    doffed_h, doffed_m = don_and_doff[1].split(":")
-    # donned_dt could be the earliest point that matches donned_h
-    donned_dt = datetime(year, month, day, int(donned_h), int(donned_m), 0, 0)
-    # Let's be lenient, and give 30 seconds of datapoints more
-    if int(doffed_h) < 13 & int(doffed_h) > int(donned_h):
-        doffed_dt = datetime(year, month, day+1, int(doffed_h), int(doffed_m), 30, 0)
+    id    |             filename              | don_t | doff_t
+    ----------------------------------------------------------
+    LL001 | 20201223-083057_LL001_M1_Day_1.h5 | 9:20  | 17:30
+
+    Split the filename with '/' and take the first (path_removed).
+    Then we concatenate them with the time searched from the REDCap
+        export file to generate don_dt and doff_dt (dt: datetime object)
+
+    You're also requested to provide the 'site' where the data
+        were collected. This eventually will be provided as the
+        drop-down menu whose values are from pytz.all_timezones
+    '''
+    path_removed = filename.split('/')[-1]
+
+    def match_any(x, filename):
+        '''
+        Highly likely, entries of the column: filename in redcap_csv
+            could be erroneous. Therefore, to be on the safe side,
+            split REDCap entry and check if more than half the splitted items
+            are included in the filename.
+        '''
+        if type(x) == str:
+            ls = re.split('[-:_.]', x)
+            lowered = list(map(lambda x:x.lower(), ls))
+            if np.mean([x in filename.lower() for x in lowered]) > 0.5:
+                return(True)
+            else:
+                return(False)
+        else:
+            return(False)
+        
+    idx = redcap_csv.filename.apply(lambda x: match_any(x, filename))
+
+    don_n_doff = redcap_csv.loc[np.where(idx)[0][0], ['don_t', 'doff_t']]
+    #don_n_doff = times.values[0]  # times is a Pandas Series
+
+    temp = path_removed.split('-')[0]
+    don_h, don_m = don_n_doff[0].split(":")
+    doff_h, _ = don_n_doff[1].split(":")
+
+    don_dt = datetime.strptime('-'.join([temp, don_n_doff[0]]),
+                                 '%Y%m%d-%H:%M') + timedelta(minutes=1)
+    doff_temp = datetime.strptime('-'.join([temp, don_n_doff[1]]),
+                                    '%Y%m%d-%H:%M')
+    '''
+    There are cases where the REDCap values are spurious at best.
+    Sometimes the first time point recorded in sensors could be later
+        than what's listed as the time_donned in the REDCap file by
+        few microseconds.
+    This would case the problem later, as the method of the Subject class
+        [_prep_row_idx] will 'assume' that the opposite is always true,
+        and calculate: REDCap time_donned - sensor initial time.
+    Of course this will be a negative value, ruining everything; so add
+        a minute to what's reported on the REDCap time donned.
+    If the time sensors were doffed was early in the morning (ex. 2 AM)
+        you know that a day has passed.
+    The condition below, however, may not catch every possible exception.
+    Let's hope for the best that everyone removed the sensors
+        before 2 PM the next day.
+    '''
+    if int(doff_h) < 14 & (abs(int(don_h) - int(doff_h)) < 10):
+        doff_dt = doff_temp + datetime.timedelta(days=1)
     else:
-        doffed_dt = datetime(year, month, day, int(doffed_h), int(doffed_m), 30, 0)
-    return ([donned_dt, doffed_dt])
+        doff_dt = doff_temp
+
+    def convert_to_utc(dt, site):
+        local = pytz.timezone(site)
+        local_dt = local.localize(dt, is_dst = None)
+        utc_dt = local_dt.astimezone(pytz.utc)
+        return(utc_dt)
+
+    # site-specific don/doff times are converted to UTC time
+    utc_don_doff = list(map(lambda lst: convert_to_utc(lst, site), [don_dt, doff_dt]))
+    return (utc_don_doff)
 
