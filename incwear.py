@@ -1,21 +1,11 @@
 '''
-HDF stands for [Hierarchical Data Format]. Every object in an HDF5 file has a name,
-and they're arranged in a POSIX-style hierarchy with / separators
-'''
-import re
-import numpy as np
-import pandas as pd
-import h5py
-from functools import partial
-import matplotlib.pyplot as plt
-from scipy.signal import find_peaks, detrend
-from datetime import datetime, timedelta, timezone
-import pytz
-'''
 Written by Jinseok Oh, Ph.D.
 2022/9/13 - present (as of 2022/12/6)
 
-ReadSensorLog.py is a python script porting MakeDataStructure_v2.m,
+HDF stands for [Hierarchical Data Format]. Every object in an HDF5 file has a name,
+and they're arranged in a POSIX-style hierarchy with / separators
+
+incwear.py is a python script porting MakeDataStructure_v2.m,
     a file prepared to extract data from APDM OPAL V2 sensors.
 
 A data file in h5 format would have three Level-1 names:
@@ -36,29 +26,48 @@ Original script exports the following values:
     - q [Orientation data from 'Processed']
     - id ['Sensors' - 'Name']
     - iButtonPressed ['Annotations']
-
-Class Subject will try to have all those values,
-    particularly those used in the actual analysis.
-However, not in the exact format.
-For example, if 'Annotations' is saved as an attribute: 'annots',
-    then a user can access its sub-attribute, such as caseID
-[well but it's not used anyways...]
 '''
+import re
+from datetime import datetime, timedelta, timezone
+import dataclasses
+import numpy as np
+import pandas as pd
+import h5py
+from functools import partial
+import matplotlib.pyplot as plt
+from scipy.signal import find_peaks, detrend
+import pytz
 #filename = '/Users/joh/Downloads/20220322-084542_LL020_M2_D2.h5'
-class Subject():
 
-    # Make the default detrend option to median. Another option is 'customfunc'.
-    def __init__(self, filename, in_en_dts, det_option = 'median'):
+@dataclasses.dataclass
+class Threshold_vars:
+    ''' Storing all threshold related measures '''
+    laccth: float
+    lnaccth: float
+    raccth: float
+    rnaccth: float
+    over_laccth: list
+    over_raccth: list
+    under_lnaccth: list
+    under_rnaccth: list
+    thresholded_l: list
+    thresholded_r: list
 
-        f = h5py.File(filename, 'r')
+class Subject:
+    '''
+    An object that will store values of kinematic variables
+        derived from the OPAL V2 recordings
+    '''
+    def __init__(self, filename, in_en_dts):
 
-        # Save the file name
+        h5file = h5py.File(filename, 'r')
         self.filename = filename
 
         # Annotations comprises three columns: Time, Case ID, annotation
         # Time in epoch microseconds... what does this mean?
-        self.annots = f['Annotations']
-      
+        # (12/14/2022, no more an instance attribute)
+        # self.annots = f['Annotations']
+
         '''
         'Sensors' has TWO members.
         Each subgroup will have a name in the format of XI-XXXXXX.
@@ -66,12 +75,12 @@ class Subject():
         This study used two sensors during a recording,
             so there will be two subgrops.
         '''
-        self.sensors = f['Sensors']
-        self.sensorids = list(self.sensors.keys())
+        sensors = h5file['Sensors']
+        sensorids = list(sensors.keys())
 
         # To determine which sensor was attached to the left foot
         leftidx = 0
-        whichfoot = self.sensors[self.sensorids[leftidx]]\
+        whichfoot = sensors[sensorids[leftidx]]\
                 ['Configuration']['Config Strings'][0][2].decode()
         if ('derecho' in whichfoot) or ('right' in whichfoot.lower()):
             rightidx = 0
@@ -83,73 +92,73 @@ class Subject():
         # Example:
         # test = Subject('Users/joh/Downloads/xxx.h5')
         # test.left.Accelerometer
-        self.left = self.sensors[self.sensorids[leftidx]]
-        self.right = self.sensors[self.sensorids[rightidx]]
+        left_sensor = sensors[sensorids[leftidx]]
+        right_sensor = sensors[sensorids[rightidx]]
 
-        self.N = self.left['Accelerometer'].shape[0] # Num of datapoints
-
-        self.T = 0.05 # 1 data point every 50000μs or 0.05s
-        self.sfreq = int(1/self.T) # sampling frequency.
+        # pylint tells me that I already have too may instance attributes...I'm trying...
+        self.sensors = {'L':left_sensor, 'R':right_sensor}
 
         # Recorded timepoints in UTC!
-        self.rtime = map(self._calc_datetime, self.left['Time'])
+        # self.rtime = map(self._calc_datetime, self.left['Time'])
 
-        self.procs = f['Processed'] # the orientation in quarternion
-        self.ori_left = self.procs[self.sensorids[leftidx]]['Orientation']
-        self.ori_right = self.procs[self.sensorids[rightidx]]['Orientation']
+        # Not making them instance attributes, as pylint tells me that
+        # the class has too many instance attributes (12/14/2022)
+        #self.procs = f['Processed'] # the orientation in quarternion
+        #self.ori_left = self.procs[self.sensorids[leftidx]]['Orientation']
+        #self.ori_right = self.procs[self.sensorids[rightidx]]['Orientation']
 
         # Time in seconds unit - starts from 0 and the step size is 0.05s
         # This may be used later for plotting
-        self.time = (self.left['Time'] - self.left['Time'][0])/1e6
+        # self.time = (self.left['Time'] - self.left['Time'][0])/1e6
 
         # Index with the recording start time(in) and the end time(en)
         # Note that in_en_dts are given in UTC as well
-        self.row_idx = self._prep_row_idx(in_en_dts)
+        row_idx = self._prep_row_idx(left_sensor, in_en_dts)
 
         # acceleration and gyrocscope norms
-        self.accmags = self._get_mag('Accelerometer',
-                                     self.row_idx,
-                                     det_option)
+        accmags = self._get_mag(left_sensor['Accelerometer'],
+                                right_sensor['Accelerometer'],
+                                row_idx,
+                                'median')
+        angvels = self._get_mag(left_sensor['Gyroscope'],
+                                right_sensor['Gyroscope'],
+                                row_idx,
+                                'median')
 
-        self.count = self._get_count()
+        acounts = self._get_count(accmags, angvels)
 
-        # Storing the acceleration threshold values: [laccth, lnaccth, raccth, rnaccth]
-        self.laccth, self.lnaccth, self.raccth, self.rnaccth = self._get_ind_acc_threshold()
+        # Storing the acceleration threshold values:
+        #   [laccth, lnaccth, raccth, rnaccth]
+        laccth, lnaccth, raccth, rnaccth = self._get_ind_acc_threshold(accmags)
+        over_laccth = accmags.lmag > laccth
+        under_lnaccth = accmags.lmag < lnaccth
+        over_raccth = accmags.rmag > raccth
+        under_rnaccth = accmags.rmag < rnaccth
+        thresholded_l = over_laccth + under_lnaccth * -1
+        thresholded_r = over_raccth + under_rnaccth * -1
+        self.thresholds = Threshold_vars(laccth = laccth,
+                                         raccth = raccth,
+                                         lnaccth = lnaccth,
+                                         rnaccth = rnaccth,
+                                         over_laccth = over_laccth,
+                                         over_raccth = over_raccth,
+                                         under_lnaccth = under_lnaccth,
+                                         under_rnaccth = under_rnaccth,
+                                         thresholded_l = thresholded_l,
+                                         thresholded_r = thresholded_r)
 
-        # 'combined' are acc norms and count values
-        lcombined = pd.merge(self.accmags.lmag,
-                             self.count['lcount'],
-                             right_index = True,
-                             left_index = True)
-        rcombined = pd.merge(self.accmags.rmag,
-                             self.count['rcount'],
-                             right_index = True,
-                             left_index = True)
-        # 'count' could not be the column name, because that's already taken
-        #  for an attribute of a dataframe.
-        self.lcombined = lcombined.rename(
-                columns = {'lmag':'accmag', 'lcount':'counts'})
-        self.rcombined = rcombined.rename(
-                columns = {'rmag':'accmag', 'rcount':'counts'})
-
-        # mark 1 where the acceleration norm vector element crossed
-        #  either a positive or negative threshold
-        self.ValLthr_pos = (self.lcombined.counts ==  1.0) & (self.lcombined.accmag > self.laccth)
-        self.ValLthr_neg = (self.lcombined.counts == -1.0) & (self.lcombined.accmag < self.lnaccth)
-        self.ValRthr_pos = (self.rcombined.counts ==  1.0) & (self.rcombined.accmag > self.raccth)
-        self.ValRthr_neg = (self.rcombined.counts == -1.0) & (self.rcombined.accmag < self.rnaccth)
-
-        # 'thresholded' attributes would be 
-        #  1: over the positive threshold 
+        # 'thresholded' attributes would be
+        #  1: over the positive threshold
         # -1: under the negative threshold
         #  0: otherwise
-        self.lthresholded = self.ValLthr_pos + self.ValLthr_neg * -1
-        self.rthresholded = self.ValRthr_pos + self.ValRthr_neg * -1
+        #self.lthresholded = self.ValLthr_pos + self.ValLthr_neg * -1
+        #self.rthresholded = self.ValRthr_pos + self.ValRthr_neg * -1
 
         #self.Tcount = self._get_Tcount()
-        # Tmov will be 1 if acceleration value 
+        # Tmov will be 1 if acceleration value
         #  crossed thresholds (neg or pos) two times.
-        self.Tmov = self._get_mov()
+        tcounts = self._get_Tcount(acounts)
+        self.Tmov = self._get_mov(tcounts)
 
         # This is a dictionary with 2 keys ("Lkinematics", "Rkinematics")
         # Each key will have a corresponding dictionary as its value
@@ -159,7 +168,7 @@ class Subject():
         # 4) LavepMov  : A vector that stores the average of the acceleration norm per bout.
         # 5) LpeakpMov : A vector that sotres the maximum of the acceleration norm per bout
         # 6) RMovLength, RavepMov, RpeakpMov: Right equivalents of the first three columns
-        self.kinematics = self._raw_mov_kinematics()
+        self.kinematics = self._raw_mov_kinematics(acounts, accmags)
 
     # This function will calculate the actual date and time from the time recorded in the sensor
     def _calc_datetime(self, x):
@@ -170,33 +179,45 @@ class Subject():
         record_start_time = datetime.fromtimestamp(x/1e6, timezone.utc)
         return record_start_time
 
-    # dtype argument should be either 'Accelerometer' or 'Gyroscope'
-    # row_idx should be a list of two indices: user-specified array start and end
-    # det_option: how are you going to [det]rend the data?
-    def _get_mag(self, dtype, row_idx=None, det_option='median'):
+    def _get_mag(self, arr_l, arr_r, row_idx=None, det_option='median'):
+        '''
+        A function to calculate the magnitude of a provided dtype.
+
+        Arguments:
+            arr_l: 'L'eft sensor's accelerometer/gyroscope values
+            arr_r: 'R'ight sensor equivalent
+            row_idx: a list of two indices arrays of [start] and [end]
+            det_option: det[rending] option, 'median' or 'customfunc'
+
+        Returns:
+            magnitude of acceleration or angular velocity
+        '''
+        n = arr_l.shape[0] # Num of datapoints
+
         if det_option not in ['median', 'customfunc']:
             det_option='median'
             print("Wrong detrending option provided - setting it to [median]")
 
         if row_idx is None:
-            row_idx = list(range(self.N))
+            row_idx = list(range(n))
 
         # Use np.linalg.norm... amazing!
-        magdata_l = np.linalg.norm(self.left[dtype][row_idx], axis=1)
-        magdata_r = np.linalg.norm(self.right[dtype][row_idx], axis=1)
+        magdata_l = np.linalg.norm(arr_l[row_idx], axis=1)
+        magdata_r = np.linalg.norm(arr_r[row_idx], axis=1)
         mags = pd.DataFrame(data = {'lmag':magdata_l, 'rmag':magdata_r})
 
-        # MATLAB's detrend function is not used, so we can consider that the default option
-        # for detrending the data is subtracting the median
+        # MATLAB's detrend function is not used, 
+        #   so we can consider that the default option
+        #   for detrending the data is subtracting the median
         if det_option == 'median':
             out = mags - mags.median(axis=0)
         else:
-            out = mags.apply(detrend, axis=0)   # else condition will be ['customfunc']
+            out = mags.apply(detrend, axis=0)   # else condition: [customfunc]
         return out
 
     # winsize in second unit
     def _mov_avg_filt(self, winsize, pdSeries):
-        L = int(self.sfreq * winsize)
+        L = int(20 * winsize)   # sfreq = 20Hz
         return(pdSeries.rolling(L).mean())
 
     def _local_maxima(self, values, height):
@@ -204,15 +225,15 @@ class Subject():
         return([locmax, maxprop])
 
     def _calc_ind_threshold(self, maxprop, ivan=False):
-        return(np.mean(maxprop['peak_heights']) 
+        return(np.mean(maxprop['peak_heights'])
                - (1-ivan + 0.5*ivan)*np.std(maxprop['peak_heights']))
 
     # All relevant parameter values coming from Trujillo-Priego et al, (2017)
     # This needs further development for sure...
-    def get_ind_acc_threshold_ivan(self, reject_th=[-1.02, 1.32], winsize=0.5, height=1.0):
-        errmsg = "The rejection threshold for the accelerometer data should be a list of \
-                a positive and a negative threshold"
-        if type(reject_th) is not list:
+    def get_ind_acc_threshold_ivan(self, accmags, reject_th=[-1.02, 1.32], winsize=0.5, height=1.0):
+        errmsg = "The rejection threshold for the accelerometer data\
+                should be a list of a positive and a negative threshold"
+        if not isinstance(reject_th, list):
             print(errmsg)
         elif len(reject_th) != 2:
             print(errmsg)
@@ -220,7 +241,7 @@ class Subject():
             print(errmsg)
         else:
             #mags2 = self._get_mag('Accelerometer', self.row_idx, 'median')
-            mags2 = self.accmags.copy()
+            mags2 = accmags.copy()
             mags2['rectlmag'] = mags2.lmag.apply(
                     lambda x: abs(x) if x > max(reject_th) or x < min(reject_th) else 0)
             mags2['rectrmag'] = mags2.rmag.apply(
@@ -235,71 +256,75 @@ class Subject():
             raccth = self._calc_ind_threshold(
                     self._local_maxima(mags2.avgrmag.values, height=height)[1])
 
-            # Now these values will be used for both positive and negative borders
+            # used for both positive and negative borders
             return([laccth, raccth])
 
     # This is equivalent to the MATLAB script
-    def _get_ind_acc_threshold(self):
+    def _get_ind_acc_threshold(self, accmags):
+        '''This function will return the four individual thresholds'''
 
         reject_th = 3.2501
         height = 1.0
 
         #mags2 = self._get_mag('Accelerometer', self.row_idx, det_option)
-        mags2 = self.accmags.copy()
-        mags2['lposthcand'] = mags2.lmag.apply(lambda x: x if x > 0 and x < reject_th else 0)
-        mags2['lnegthcand'] = mags2.lmag.apply(lambda x: abs(x) if x < 0 and x > -reject_th else 0)
-        mags2['rposthcand'] = mags2.rmag.apply(lambda x: x if x > 0 and x < reject_th else 0)
-        mags2['rnegthcand'] = mags2.rmag.apply(lambda x: abs(x) if x < 0 and x > -reject_th else 0)
+        mags2 = accmags.copy()
+        mags2['lposthcand'] = mags2.lmag.apply(
+                lambda x: x if 0 < x < reject_th else 0)
+        mags2['lnegthcand'] = mags2.lmag.apply(
+                lambda x: abs(x) if -reject_th < x < 0 else 0)
+        mags2['rposthcand'] = mags2.rmag.apply(
+                lambda x: x if 0 < x < reject_th else 0)
+        mags2['rnegthcand'] = mags2.rmag.apply(
+                lambda x: abs(x) if -reject_th < x < 0 else 0)
 
-        left_pos_peaks  = self._local_maxima(mags2.lposthcand.values, height = height)[1]
-        left_neg_peaks  = self._local_maxima(mags2.lnegthcand.values, height = height)[1]
-        right_pos_peaks = self._local_maxima(mags2.rposthcand.values, height = height)[1]
-        right_neg_peaks = self._local_maxima(mags2.rnegthcand.values, height = height)[1]
+        lppks = self._local_maxima(mags2.lposthcand.values, height = height)[1]
+        lnpks = self._local_maxima(mags2.lnegthcand.values, height = height)[1]
+        rppks = self._local_maxima(mags2.rposthcand.values, height = height)[1]
+        rnpks = self._local_maxima(mags2.rnegthcand.values, height = height)[1]
 
-        laccth  = self._calc_ind_threshold(left_pos_peaks)
-        lnaccth = self._calc_ind_threshold(left_neg_peaks)*-1
-        raccth  = self._calc_ind_threshold(right_pos_peaks)
-        rnaccth = self._calc_ind_threshold(right_neg_peaks)*-1
+        laccth  = self._calc_ind_threshold(lppks)
+        lnaccth = self._calc_ind_threshold(lnpks)*-1
+        raccth  = self._calc_ind_threshold(rppks)
+        rnaccth = self._calc_ind_threshold(rnpks)*-1
 
         return ([laccth, lnaccth, raccth, rnaccth])
 
-    def _prep_row_idx(self, in_en_dts):
-
+    def _prep_row_idx(self, sensorobj, in_en_dts):
+        '''
+        d_in_microsec is the list of TWO datetime.timedelta objects
+        The first element of this list shows the time difference between
+            the start of the time recorded in sensors and don_t.
+        The second element is the analogous for doff_t.
+        The sampling frequency of the APDM OPAL sensor is 20Hz,
+            so each data point is 1/20 seconds or 5e4 microseconds.
+        Therefore, if the time difference is represented in the
+            microseconds unit and divided by 50000 (with a bit of
+            rounding) you get how many data points don_t and doff_t
+            are away from the index 0.
+        Consequently, two indices will be searched:
+            1) startidx = data index that corresponds to the don_t
+            2) endidx = data index that corresponds to the doff_t.
+                For this one, there are occasions where the
+                REDCap reports are 'inaccurate', meaning that the
+                sensors were turned off long before the reported
+                doff_t and this exception needs to be handled by
+                simply taking the last value of the time series
+        '''
         if in_en_dts is not None:
             d_in_microsec = list(map(
-                lambda x: x - self._calc_datetime(self.left['Time'][0]), in_en_dts))
-            '''
-            d_in_microsec is the list of TWO datetime.timedelta objects
-            The first element of this list shows the time difference between
-                the start of the time recorded in sensors and don_t.
-            The second element is the analogous for doff_t.
-            The sampling frequency of the APDM OPAL sensor is 20Hz,
-                so each data point is 1/20 seconds or 5e4 microseconds.
-            Therefore, if the time difference is represented in the
-                microseconds unit and divided by 50000 (with a bit of
-                rounding) you get how many data points don_t and doff_t
-                are away from the index 0.
-            Consequently, two indices will be searched:
-                1) startidx = data index that corresponds to the don_t
-                2) endidx = data index that corresponds to the doff_t.
-                    For this one, there are occasions where the
-                    REDCap reports are 'inaccurate', meaning that the
-                    sensors were turned off long before the reported
-                    doff_t and this exception needs to be handled by
-                    simply taking the last value of the time series
-            '''
+                lambda x: x - self._calc_datetime(sensorobj['Time'][0]), in_en_dts))
             C = 1e6 # conversion constant: 1 second = 1e6 microseconds
-            N = self.T * 1e6    # 50000.0
+            N = 0.05 * 1e6    # 50000.0
             poten = round((d_in_microsec[1].seconds*C
                            + d_in_microsec[1].microseconds)/N)
-            if poten < self.left['Time'].shape[0]:
+            if poten < sensorobj['Time'].shape[0]:
                 indices = list(map(
                     lambda x: round((x.seconds*C + x.microseconds)/N), d_in_microsec))
-            else: 
-                indices = list()
-                indices.extend([round((d_in_microsec.seconds*C
-                                      + d_in_microsec.microseconds)/N),
-                                self.left['Time'].shape[0]-1])
+            else:
+                indices = []
+                indices.extend([round((d_in_microsec[0].seconds*C
+                                      + d_in_microsec[0].microseconds)/N),
+                                sensorobj['Time'].shape[0]-1])
 
             # This will be one input to self._get_mag
             row_idx = list(range(indices[0], indices[1]))
@@ -332,48 +357,53 @@ class Subject():
 
             return([self.lavth, self.ravth])
 
-    def _get_count(self):
-        acounts = self.accmags.copy().apply(np.sign)     # self.accmags is a DataFrame with two columns: lmag, rmag
-        angvels = self._get_mag('Gyroscope', self.row_idx, 'median')      # angvels is another DataFrame with two columns
+    def _get_count(self, accmags, angvels):
+        acounts = accmags.copy().apply(np.sign)
         acounts2 = acounts.rename(columns={'lmag':'lcount', 'rmag':'rcount'})
-        acounts2.lcount[angvels.lmag.le(0)] = 0                          # When angular velocity value is 0, count is 0.
+        acounts2.lcount[angvels.lmag.le(0)] = 0   # angvel == 0 -> count = 0.
         acounts2.rcount[angvels.rmag.le(0)] = 0
         return acounts2
 
-    # Let's continue working on it over the weekend or so (10/19/22)
-    def _get_Tcount(self):
+    def _get_Tcount(self, acounts):
 
         # Let's start with collecting all acc values that went over the threshold
         # The output of np.where would be a tuple - so take the first value
         # I do this to reduce the preprocessing time...
-        left_over_posth  = np.where(self.ValLthr_pos)[0]
-        right_over_posth = np.where(self.ValRthr_pos)[0]
-        left_under_negth = np.where(self.ValLthr_neg)[0]
-        right_under_negth = np.where(self.ValRthr_neg)[0]
+        left_over_posth  = np.where(self.thresholds.over_laccth)[0]
+        right_over_posth = np.where(self.thresholds.over_raccth)[0]
+        left_under_negth = np.where(self.thresholds.under_lnaccth)[0]
+        right_under_negth = np.where(self.thresholds.under_rnaccth)[0]
 
-        # parameters = indices of data points that are over the threshold (over_th_array) and
-        #               acounts['lmags'] or acounts['rmags']
-        def mark_Tcount(over_th_array, acounts_series, pos=True):
+        def mark_Tcount(over_th_array, acounts, pos=True):
+            '''
+            Arguments:
+                over_th_array = indices of data points over the threshold
+                acounts = DataFrame with two columns: 'lmags' and 'rmags'
+                          ex) acounts = self._get_count(accmags, angvels)
+
+            Returns:
+                Tcounts
+            '''
             if pos:
                 corrsign = 1
             else:
                 corrsign = -1
-            N = len(acounts_series)
+            N = len(acounts)
             M = len(over_th_array)
             Tcount = np.zeros(N)
             for i, j in enumerate(over_th_array):
                 '''
-                "over_th_array" has the indices of the acceleration values 
+                "over_th_array" has the indices of the acceleration values
                     that are over a threshold (left or right).
-                [j] gives one of those indices while [i] indicates 
+                [j] gives one of those indices while [i] indicates
                     the order of [j] in "over_th_array".
-                It could be that the Tcount value at the current index 
-                    may have been set by the previous index 
+                It could be that the Tcount value at the current index
+                    may have been set by the previous index
                     (ex. [j-2] satisfied the "else" condition so Tcount[j] = 1 or -1)
                 If so, skip to the next index.
-                Also, if the next index is not zero, then the current 
-                    Tcount[j] is considered as a redundant count and 
-                    marked off (this is from the original MATLAB code). 
+                Also, if the next index is not zero, then the current
+                    Tcount[j] is considered as a redundant count and
+                    marked off (this is from the original MATLAB code).
                     So we can skip such indices here.
                 '''
                 if (Tcount[j] == corrsign) or ((i <= (M-2)) and (Tcount[j+1] == corrsign)):
@@ -381,7 +411,7 @@ class Subject():
                 else:
                     # If three consecutive data are 1 or -1, 
                     #   the third data point's Tcount would be 1 or -1
-                    if np.all(acounts_series[j:j+3] == corrsign):
+                    if np.all(acounts[j:j+3] == corrsign):
                         Tcount[j+2] = corrsign
                     else:
                         Tcount[j] = corrsign
@@ -399,18 +429,25 @@ class Subject():
             return Tcount
 
         # keep failing this attempt...
-        #self.Tcounts = pd.DataFrame(data = dict(zip(['L', 'R'], map(partial(mark_Tcount, side=['L', 'R']), [for_left, for_right]))))
-        ltcounts  = mark_Tcount(left_over_posth, self.count['lcount'], True)
-        lntcounts = mark_Tcount(left_under_negth, self.count['lcount'], False)
-        rtcounts  = mark_Tcount(right_over_posth, self.count['rcount'], True)
-        rntcounts = mark_Tcount(right_under_negth, self.count['rcount'], False)
-        Tcounts = pd.DataFrame(data = {'L':ltcounts + lntcounts, 
-                                       'R':rtcounts+rntcounts})
+        ltcounts  = mark_Tcount(left_over_posth,
+                                acounts['lcount'],
+                                True)
+        lntcounts = mark_Tcount(left_under_negth,
+                                acounts['lcount'],
+                                False)
+        rtcounts  = mark_Tcount(right_over_posth,
+                                acounts['rcount'],
+                                True)
+        rntcounts = mark_Tcount(right_under_negth,
+                                acounts['rcount'],
+                                False)
+        Tcounts = pd.DataFrame(data = {'L':ltcounts + lntcounts,
+                                       'R':rtcounts + rntcounts})
 
         return Tcounts
 
-    def _get_mov(self):
-        Tcounts = self._get_Tcount()
+    def _get_mov(self, Tcounts):
+        #Tcounts = self._get_Tcount()
 
         def tmov(temp):
             Tmov = np.zeros(len(temp))
@@ -418,12 +455,12 @@ class Subject():
             nonzeroTC = np.where(temp!=0)[0]
             for i, j in enumerate(nonzeroTC[:-1]):
             # If the difference between the current point and 
-            #   its subsequent one is greater than 8 data points, 
+            #   its subsequent one is greater than 8 data points,
             #   skip the current point.
                 if (np.diff([j, nonzeroTC[i+1]])[0] > 8) or (Tmov[j] == 1):
                     continue
-                # If not, if the sign of the two adjacent points differ 
-                #   (-1 vs. 1 or vice versa; 0 cannot be included because 
+                # If not, if the sign of the two adjacent points differ
+                #   (-1 vs. 1 or vice versa; 0 cannot be included because
                 #   points attempt nonzeroTC cannot be 0)
                 else:
                     if np.sign(temp[j]) != np.sign(temp[nonzeroTC[i+1]]):
@@ -435,79 +472,105 @@ class Subject():
         Tmov = Tcounts.apply(tmov, axis=0)
         return Tmov
 
-    def _raw_mov_kinematics(self):
+    def _raw_mov_kinematics(self, acounts, accmags):
 
-        def start_to_end(Tmov_series, thr_array, combined, side='L'):
-            Tmovidx = np.nonzero(Tmov_series.values)[0]        # Indices where Tmov == 1
-            N = len(Tmovidx)                            # This number is what we need
-            lenMov  = np.zeros(N)       # How many data points between the start and the end of a bout?
-            avepMov = np.zeros(N)       # Average acceleration per Movement
-            peakpMov = np.zeros(N)      # Peak acceleration per Movement
-            movstart = np.zeros(N)      # Will store indices of the starts of bouts
-            movend   = np.zeros(N)      # Will store indices of the ends of bouts
-            if side == 'R':
-                colnames = ['RMovIdx', 
-                            'RMovStart', 
-                            'RMovEnd', 
-                            'RMovLength', 
-                            'RavepMov', 
-                            'RpeakpMov']
-            else:
-                colnames = ['LMovIdx', 
-                            'LMovStart', 
-                            'LMovEnd', 
-                            'LMovLength', 
-                            'LavepMov', 
-                            'LpeakpMov']
+        lcombined = pd.merge(accmags.lmag,
+                             acounts['lcount'],
+                             right_index = True,
+                             left_index = True)
+        rcombined = pd.merge(accmags.rmag,
+                             acounts['rcount'],
+                             right_index = True,
+                             left_index = True)
 
-            # j is the index of Tmov's. 
+        lcombined.rename(columns = {'lmag':'accmag', 'lcount':'counts'},
+                         inplace=True)
+        rcombined.rename(columns = {'rmag':'accmag', 'rcount':'counts'},
+                         inplace=True)
+
+        def start_to_end(Tmov_series, thr_array, df):
+            ''' This function will provide six pieces of
+            movement related information
+
+            Arguments:
+                Tmov_series: output of _get_mov()
+                thr_array: blah
+                df: a data frame with 'accmags' and 'counts'
+
+            Returns:
+                a dictionary of pieces of movement related information
+                    - index: second crossing of accmag threshold
+                    - how long was a movement
+                    - where was the start of a movement
+                    - where was the end of a movement
+                    - what was the average acceleration per movement
+                    - what was the peak acceleration per movement
+            '''
+            Tmovidx = np.nonzero(Tmov_series.values)[0]
+            N = len(Tmovidx)
+            movinfo = np.zeros((N, 5))  # movement length
+                                        # index: start of a movement
+                                        # index: end of a movement
+                                        # average acceleration per movement
+                                        # peak acceleration per movement
+            colnames = ['MovIdx',
+                        'MovLength',
+                        'MovStart',
+                        'MovEnd',
+                        'avepMov',
+                        'peakpMov']
+
+            # j is the index of Tmov's.
             # At any j, count will be -1 or 1 and not 0.
             for i, j in enumerate(Tmovidx):
                 k = -1              # Moving backward...
                 while True:
-                    # ... to find the data point that crossed the threshold value 
-                    #   whose sign is opposite to the count at j. This means that 
+                    # ... to find the data point that crossed the threshold value
+                    #   whose sign is opposite to the count at j. This means that
                     #   the baseline (accmag = 0) is crossed once.
-                    if np.sign(thr_array[j+k]) == -np.sign(combined['counts'][j]):
-                        movstartidx = int(j+k)      # The start of a bout
+                    if np.sign(thr_array[j+k]) == -np.sign(df['counts'][j]):
+                        movsidx = int(j+k)      # The start of a bout
                         break
                     else:
                         k -= 1      # Keep going backwards if a previous attempt failed
                 m = 1               # Moving forward...
                 while True:
-                    # ... to find the data point that either touches 
+                    # ... to find the data point that either touches
                     # or crosses the baseline one more time.
                     # This time the sign of the data point at the
                     # index [j+l] could be 0 or opposite to that of
                     # the datapoint at the index [j]
-                    if np.sign(combined['counts'][j+m]) != np.sign(combined['counts'][m]):
-                        movendidx = int(j+m)       # The end of a bout
+                    if np.sign(df['counts'][j+m]) != np.sign(df['counts'][m]):
+                        moveidx = int(j+m)       # The end of a bout
                         break
                     else:
                         m += 1
-                movstart[i] = movstartidx
-                movend[i] = movendidx
-                lenMov[i] = movendidx - movstartidx + 1
-                avepMov[i] = sum(abs(combined.accmag[movstartidx:(movendidx+1)])) / lenMov[i]
-                peakpMov[i] = max(abs(combined.accmag[movstartidx:(movendidx+1)]))
-
-            return(dict(zip(colnames, [Tmovidx, movstart, movend, lenMov, avepMov, peakpMov])))
+                movinfo[i, :] = [moveidx - movsidx + 1,
+                                 movsidx,
+                                 moveidx,
+                                 np.mean(abs(df.accmag[movsidx:(moveidx+1)])),
+                                 max(abs(df.accmag[movsidx:(moveidx+1)]))]
+            return(dict(zip(colnames, [Tmovidx,
+                                       movinfo[:,0],
+                                       movinfo[:,1],
+                                       movinfo[:,2],
+                                       movinfo[:,3],
+                                       movinfo[:,4]])))
 
         Lkinematics = start_to_end(self.Tmov.L,
-                                   self.lthresholded.copy(),
-                                   self.lcombined.copy(),
-                                   'L')
+                                   self.thresholds.thresholded_l.copy(),
+                                   #self.lthresholded.copy(),
+                                   lcombined.copy())
         Rkinematics = start_to_end(self.Tmov.R,
-                                   self.rthresholded.copy(),
-                                   self.rcombined.copy(),
-                                   'R')
+                                   self.thresholds.thresholded_r.copy(),
+                                   #self.rthresholded.copy(),
+                                   rcombined.copy())
         # Lkinematics and Rkinematics could differ in length - so better return a dictionary.
         kinematics  = {'Lkinematics':Lkinematics, 'Rkinematics':Rkinematics}
 
         return kinematics
 
     def _mark_simultaneous(self):
-
         '''
         We need to re-evaluate how we operationalize simultaneity of bouts.
         Let's suppose that at the index j, Tmov.L[j] = 1
@@ -528,12 +591,12 @@ class Subject():
 
         # sole_r and sole_l will each show the indices of nonzero RTmov and LTmov elements
         # In other words, locations of bouts
-        sole_r = pd.DataFrame(data = {'MovIdx':r_dict['RMovIdx'],
-                                      'Start':r_dict['RMovStart'],
-                                      'End': r_dict['RMovEnd']})
-        sole_l = pd.DataFrame(data = {'MovIdx':l_dict['LMovIdx'],
-                                      'Start':l_dict['LMovStart'],
-                                      'End': l_dict['LMovEnd']})
+        sole_r = pd.DataFrame(data = {'MovIdx':r_dict['MovIdx'],
+                                      'Start':r_dict['MovStart'],
+                                      'End': r_dict['MovEnd']})
+        sole_l = pd.DataFrame(data = {'MovIdx':l_dict['MovIdx'],
+                                      'Start':l_dict['MovStart'],
+                                      'End': l_dict['MovEnd']})
 
         # If RStart is equal to Lstart, the corresponding RMovIdx is
         # bilateral synchronous to the LMovIdx associated with the LStart
