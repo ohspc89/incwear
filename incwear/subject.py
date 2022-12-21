@@ -1,4 +1,4 @@
-'''
+"""
 Written by Jinseok Oh, Ph.D.
 2022/9/13 - present (as of 2022/12/6)
 
@@ -26,7 +26,7 @@ Original script exports the following values:
     - q [Orientation data from 'Processed']
     - id ['Sensors' - 'Name']
     - iButtonPressed ['Annotations']
-'''
+"""
 import re
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
@@ -39,7 +39,7 @@ import pytz
 #filename = '/Users/joh/Downloads/20220322-084542_LL020_M2_D2.h5'
 
 @dataclass
-class Tderivs:
+class tderivs:
     """ Storing measures derived from thresholds """
     accmags: pd.DataFrame
     thresholds: list    # [laccth, lnaccth, raccth, rnaccth]
@@ -59,11 +59,11 @@ class Tderivs:
                 'L': self.over_accth['L'] + self.under_naccth['L'] * -1,
                 'R': self.over_accth['R'] + self.under_naccth['R'] * -1}
 
-class Subject:
-    '''
+class subject:
+    """
     An object that will store values of kinematic variables
         derived from the OPAL V2 recordings
-    '''
+    """
     def __init__(self, filename, in_en_dts, label_r):
 
         with h5py.File(filename, 'r') as h5file:
@@ -110,7 +110,7 @@ class Subject:
             # Storing the acceleration threshold values:
             #   [laccth, lnaccth, raccth, rnaccth]
             thresholds = self._get_ind_acc_threshold(accmags)
-            self.tderivs = Tderivs(accmags = accmags,
+            self.tderivs = tderivs(accmags = accmags,
                                    thresholds = thresholds)
 
             # Tmov will be 1 if acceleration value
@@ -121,13 +121,8 @@ class Subject:
 
             # This is a dictionary with 2 keys ("Lkinematics", "Rkinematics")
             # Each key will have a corresponding dictionary as its value
-            # 1) LMovstart : A vector storing indices of the start of a bout
-            # 2) LMovend   : A vector storing indices of the end of a bout
-            # 3) LMovLength: A vector that stores the length of each bout. Non-zero indices will be equal to those of Tmov
-            # 4) LavepMov  : A vector that stores the average of the acceleration norm per bout.
-            # 5) LpeakpMov : A vector that sotres the maximum of the acceleration norm per bout
-            # 6) RMovLength, RavepMov, RpeakpMov: Right equivalents of the first three columns
-            self.kinematics = self._raw_mov_kinematics(acounts, accmags)
+            #   [MovIdx, MovLength, MovStart, MovEnd, avepMov, peakpMov]
+            self.kinematics = self._raw_mov_kinematics(accmags, acounts)
 
     # This function will calculate the actual date and time from the time recorded in the sensor
     def _calc_datetime(self, time_stamp):
@@ -199,43 +194,37 @@ class Subject:
         return out
 
     # winsize in second unit
-    def _mov_avg_filt(self, winsize, pdSeries):
+    def _mov_avg_filt(self, winsize, pd_series):
         win_len = int(20 * winsize)   # sfreq = 20Hz
-        return(pdSeries.rolling(win_len).mean())
+        return(pd_series.rolling(win_len).mean())
 
     def _calc_ind_threshold(self, maxprop, ivan=False):
         return(np.mean(maxprop['peak_heights'])
                - (1-ivan + 0.5*ivan)*np.std(maxprop['peak_heights']))
 
-    # All relevant parameter values coming from Trujillo-Priego et al, (2017)
-    # This needs further development for sure...
-    def get_ind_acc_threshold_ivan(self, accmags, reject_th=[-1.02, 1.32], winsize=0.5, height=1.0):
-        errmsg = "The rejection threshold for the accelerometer data\
-                should be a list of a positive and a negative threshold"
-        if not isinstance(reject_th, list):
-            print(errmsg)
-        elif len(reject_th) != 2:
-            print(errmsg)
-        elif sum(np.sign(reject_th)) != 0:
-            print(errmsg)
-        else:
-            mags2 = accmags.copy()
-            mags2['rectlmag'] = mags2.lmag.apply(
-                    lambda x: abs(x) if x > max(reject_th) or x < min(reject_th) else 0)
-            mags2['rectrmag'] = mags2.rmag.apply(
-                    lambda x: abs(x) if x > max(reject_th) or x < min(reject_th) else 0)
+    def get_ind_acc_threshold_ivan(self, accmags, winsize=0.5, height=1.0):
+        """
+        All relevant parameter values coming from Trujillo-Priego et al., (2017)
+        Needs further development
+        """
+        reject = [-1.02, 1.32]
 
-            mags2['avglmag'] = self._mov_avg_filt(winsize, mags2['rectlmag'])
-            mags2['avgrmag'] = self._mov_avg_filt(winsize, mags2['rectrmag'])
+        mags2 = accmags.copy()
+        mags2['rectlmag'] = mags2.lmag.apply(
+                lambda x: abs(x) if x > max(reject) or x < min(reject) else 0)
+        mags2['rectrmag'] = mags2.rmag.apply(
+                lambda x: abs(x) if x > max(reject) or x < min(reject) else 0)
 
+        mags2['avglmag'] = self._mov_avg_filt(winsize, mags2['rectlmag'])
+        mags2['avgrmag'] = self._mov_avg_filt(winsize, mags2['rectrmag'])
 
-            laccth = self._calc_ind_threshold(
-                    find_peaks(mags2.avglmag.values, height=height)[1])
-            raccth = self._calc_ind_threshold(
-                    find_peaks(mags2.avgrmag.values, height=height)[1])
+        laccth = self._calc_ind_threshold(
+                find_peaks(mags2.avglmag.values, height=height)[1])
+        raccth = self._calc_ind_threshold(
+                find_peaks(mags2.avgrmag.values, height=height)[1])
 
-            # used for both positive and negative borders
-            return([laccth, raccth])
+        # used for both positive and negative borders
+        return([laccth, raccth])
 
     # This is equivalent to the MATLAB script
     def _get_ind_acc_threshold(self, accmags, reject = 3.2501, height = 1.0):
@@ -320,18 +309,18 @@ class Subject:
             #       simply taking the last value of the time series
             d_in_micro = list(map(
                 lambda x: x - self._calc_datetime(sensorobj['Time'][0]), in_en_dts))
-            cc = 1e6    # conversion constant: 1 second = 1e6 microseconds
-            microlen = 0.05 * cc    # duration of a data point in microseconds
-            poten = round((d_in_micro[1].seconds*cc
+            convert = 1e6    # conversion constant: 1 second = 1e6 microseconds
+            microlen = 0.05 * convert    # duration of a data point in microseconds
+            poten = round((d_in_micro[1].seconds*convert
                            + d_in_micro[1].microseconds)/microlen)
             if poten < sensorobj['Time'].shape[0]:
                 indices = list(map(
                     lambda x: round(
-                        (x.seconds*cc + x.microseconds)/microlen),
+                        (x.seconds*convert + x.microseconds)/microlen),
                     d_in_micro))
             else:
                 indices = []
-                indices.extend([round((d_in_micro[0].seconds*cc
+                indices.extend([round((d_in_micro[0].seconds*convert
                                       + d_in_micro[0].microseconds)/microlen),\
                                 sensorobj['Time'].shape[0]-1])
 
@@ -343,13 +332,13 @@ class Subject:
                     Analysis done on the entire recording")
         return row_idx
 
-    def get_ind_angvel_threshold(self, reject = 0.32, winsize = 0.5, height=0.01):
+    def get_ind_angvel_threshold(self, accmags, reject = 0.32, winsize = 0.5, height=0.01):
         """ feature of Trujillo-Priego et al. (2017), needs development """
         errmsg = "The rejection threshold for the gyroscope \
                 data should be a positive value"
         assert (reject > 0), errmsg
 
-        mags2 = self._get_mag('Gyroscope', self.row_idx, 'median')
+        mags2 = accmags.copy()
         mags2['rectlmag'] = mags2.lmag.apply(lambda x: x if x > reject else 0)
         mags2['rectrmag'] = mags2.rmag.apply(lambda x: x if x > reject else 0)
 
@@ -424,11 +413,10 @@ class Subject:
                     nonzero counts that crossed
                     a positive or negative threshold
             """
+            corrsign = -1
             if pos:
                 corrsign = 1
-            else:
-                corrsign = -1
-            M = len(over_th_array)
+            arr_len = len(over_th_arr)
             t_count = np.zeros(len(acounts))
             for i, j in enumerate(over_th_arr):
                 # "over_th_array" has the indices of the acceleration values
@@ -444,7 +432,7 @@ class Subject:
                 #   marked off (this is from the original MATLAB code).
                 #   So we can skip such indices here.
                 if (t_count[j] == corrsign) or\
-                        ((i <= (M-2)) and (t_count[j+1] == corrsign)):
+                        ((i <= (arr_len-2)) and (t_count[j+1] == corrsign)):
                     continue
                 else:
                     # If three consecutive data are 1 or -1,
@@ -455,13 +443,13 @@ class Subject:
                         t_count[j] = corrsign
 
             nz_tcount = np.where(t_count != 0)[0]    # non-zero Tcounts
-            L = len(nz_tcount)
+            nztc_len = len(nz_tcount)
 
             # Remove duplicates
             for i, j in enumerate(nz_tcount):
-                if (i <= (L-2)) and (nz_tcount[i+1] == (j+1)):
+                if (i <= (nztc_len-2)) and (nz_tcount[i+1] == (j+1)):
                     t_count[j] = 0
-                elif (i == (L-1)) and (nz_tcount[i-1] == (j-1)):
+                elif (i == (nztc_len-1)) and (nz_tcount[i-1] == (j-1)):
                     t_count[j-1] = 0
 
             return t_count
@@ -522,7 +510,6 @@ class Subject:
         Return:
             kinematics: dict
         """
-
         lcombined = pd.merge(accmags.lmag,
                              acounts['lcount'],
                              right_index = True,
@@ -537,9 +524,9 @@ class Subject:
         rcombined.rename(columns = {'rmag':'accmag', 'rcount':'counts'},
                          inplace=True)
 
-        def start_to_end(tmov_series, th_arr, df):
+        def start_to_end(tmov_series, th_arr, mags_n_cnts):
             """
-            This function will provide six pieces of 
+            This function will provide six pieces of
             movement related information
 
             Parameters:
@@ -550,7 +537,7 @@ class Subject:
                     its corresponding threshold, the value is 1
                     Otherwise, 0.
                     ex) self.tderivs.th_crossed['L'].copy()
-                df: pd.DataFrame
+                mags_n_cnts: pd.DataFrame
                     a data frame that has accmag and counts values
 
             Returns:
@@ -580,28 +567,29 @@ class Subject:
                     # ... to find the data point that crossed the threshold value
                     #   whose sign is opposite to the count at j. This means that
                     #   the baseline (accmag = 0) is crossed once.
-                    if np.sign(th_arr[j+k]) == -np.sign(df['counts'][j]):
+                    if np.sign(th_arr[j+k]) ==\
+                            -np.sign(mags_n_cnts['counts'][j]):
                         movsidx = int(j+k)  # "MOV"ement "S"tart "INDEX"
                         break
-                    else:
-                        k -= 1      # Keep going backwards if a previous attempt failed
-                m = 1               # Moving forward...
+                    k -= 1      # Keep going backwards if a previous attempt failed
+                idx2 = 1               # Moving forward...
                 while True:
                     # ... to find the data point that either touches
                     # or crosses the baseline one more time.
                     # This time the sign of the data point at the
                     # index [j+l] could be 0 or opposite to that of
                     # the datapoint at the index [j]
-                    if np.sign(df['counts'][j+m]) != np.sign(df['counts'][m]):
-                        moveidx = int(j+m)  # "MOV"ement "E"nd "INDEX"
+                    if np.sign(mags_n_cnts['counts'][j+idx2]) !=\
+                            np.sign(mags_n_cnts['counts'][idx2]):
+                        moveidx = int(j+idx2)  # "MOV"ement "E"nd "INDEX"
                         break
-                    else:
-                        m += 1
+                    idx2 += 1
                 movinfo[i, :] = [moveidx - movsidx + 1,
                                  movsidx,
                                  moveidx,
-                                 np.mean(abs(df.accmag[movsidx:(moveidx+1)])),
-                                 max(abs(df.accmag[movsidx:(moveidx+1)]))]
+                                 np.mean(
+                                     abs(mags_n_cnts.accmag[movsidx:(moveidx+1)])),
+                                 max(abs(mags_n_cnts.accmag[movsidx:(moveidx+1)]))]
             return(dict(zip(colnames, [tmovidx,
                                        movinfo[:,0],
                                        movinfo[:,1],
@@ -622,7 +610,7 @@ class Subject:
         return kinematics
 
     def _mark_simultaneous(self):
-        '''
+        """
         We need to re-evaluate how we operationalize simultaneity of bouts.
         Let's suppose that at the index j, Tmov.L[j] = 1
         If the following three conditions are all true for another index k:
@@ -636,7 +624,7 @@ class Subject:
         Simultaneous will be further specified to two cases.
             1) Bilateral Synchronous: starting points of RestMov and LestMov are exactly the same
             2) Bilateral Asynchronous: starting points don't match, but they overlap
-        '''
+        """
         r_dict = self.kinematics['Rkinematics'].copy()
         l_dict = self.kinematics['Lkinematics'].copy()
 
@@ -655,9 +643,9 @@ class Subject:
         # then it's bilateral asynchronous
 
         def match_idx(sole_1, sole_2, refside = 'R'):
-            bilatSyncidx = {}
-            bilatAsyncidx = {}
-            bilatTotal = {}
+            bilat_syncidx = {}
+            bilat_asyncidx = {}
+            bilat_total = {}
             if refside == 'L':
                 keys = ['LStart', 'RStart']
             else:
@@ -665,16 +653,15 @@ class Subject:
             for i, mov in enumerate(sole_1.MovIdx):
                 for j in range(sole_2.shape[0]):
                     if sole_2.Start[j] < mov < sole_2.End[j]:
-                        bilatTotal[mov] = i
+                        bilat_total[mov] = i
                         if sole_1.Start[i] == sole_2.Start[j]:
                             # You're storing the row indices of LStart and RStart
                             # This is for the ease of later processing of sole_r and sole_l
-                            bilatSyncidx[mov] = dict(zip(keys, [i,j]))
-                            break
+                            bilat_syncidx[mov] = dict(zip(keys, [i,j]))
                         else:
-                            bilatAsyncidx[mov] = dict(zip(keys, [i,j]))
-                            break
-            return({'Sync':bilatSyncidx, 'Async':bilatAsyncidx, 'Total':bilatTotal})
+                            bilat_asyncidx[mov] = dict(zip(keys, [i,j]))
+                        break
+            return({'Sync':bilat_syncidx, 'Async':bilat_asyncidx, 'Total':bilat_total})
 
         # still takes quite a long time...need to make it more efficient
         bilat_r = match_idx(sole_r, sole_l)
@@ -684,39 +671,49 @@ class Subject:
         return({'RSim':bilat_r, 'LSim':bilat_l})
 
 def make_start_end_datetime(redcap_csv, filename, site):
-    '''
-    A filename (if we're living in an ideal world) is in the format:
-        '/Some path/YYYYmmdd-HHMMSS_[participant identifier].h5'
-    Use the .h5 filename -> search times sensors were donned and doffed
-    A redcap_csv will be in the following format (example below)
+    """
+    A function to make two datetime objects based on the
+        entries from the REDCap export
 
-    id    |             filename              | don_t | doff_t
-    ----------------------------------------------------------
-    LL001 | 20201223-083057_LL001_M1_Day_1.h5 | 9:20  | 17:30
+    Parameters:
+        redcap_csv: pd.DataFrame
+        filename: string
+            format: '/Some path/YYYYmmdd-HHMMSS_[identifier].h5'
+        site: string
+            where the data were collected (ex. America/Guatemala)
 
-    Split the filename with '/' and take the first (path_removed).
-    Then we concatenate them with the time searched from the REDCap
-        export file to generate don_dt and doff_dt (dt: datetime object)
+    Returns:
+        utc_don_doff: list
+            site-specific don/doff times converted to UTC time
+    """
 
-    You're also requested to provide the 'site' where the data
-        were collected. This eventually will be provided as the
-        drop-down menu whose values are from pytz.all_timezones
-    '''
+    # Use the .h5 filename -> search times sensors were donned and doffed
+    # A redcap_csv will be in the following format (example below)
+    #
+    # id    |             filename              | don_t | doff_t
+    # ----------------------------------------------------------
+    # LL001 | 20201223-083057_LL001_M1_Day_1.h5 | 9:20  | 17:30
+    #
+    # Split the filename with '/' and take the first (path_removed).
+    # Then we concatenate them with the time searched from the REDCap
+    #   export file to generate don_dt and doff_dt (dt: datetime object)
+
     path_removed = filename.split('/')[-1]
 
-    def match_any(x, filename):
-        '''
+    def match_any(string, filename):
+        """
         Highly likely, entries of the column: filename in redcap_csv
             could be erroneous. Therefore, to be on the safe side,
             split REDCap entry and check if more than half the splitted items
             are included in the filename.
-        '''
-        if isinstance(x, str):
-            ls = re.split('[-:_.]', x)
-            lowered = list(map(lambda x:x.lower(), ls))
-            return np.mean([x in filename.lower() for x in lowered]) > 0.5
-        else:
-            return False
+        """
+        result = False
+        if isinstance(string, str):
+            splitted = re.split('[-:_.]', string)
+            lowered = list(map(lambda x:x.lower(), splitted))
+            result = np.mean([x in filename.lower() for x in lowered]) > 0.5
+
+        return result
 
     idx = redcap_csv.filename.apply(lambda x: match_any(x, filename))
 
