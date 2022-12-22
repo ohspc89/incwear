@@ -42,7 +42,7 @@ import pytz
 class tderivs:
     """ Storing measures derived from thresholds """
     accmags: pd.DataFrame
-    thresholds: list    # [laccth, lnaccth, raccth, rnaccth]
+    thresholds: dict    # laccth, lnaccth, raccth, rnaccth
     over_accth: dict = field(init=False)
     under_naccth: dict = field(init=False)
     # 'th_crossed' attributes would be
@@ -51,10 +51,12 @@ class tderivs:
     #  0: otherwise
     th_crossed: dict = field(init=False)
     def __post_init__(self):
-        self.over_accth = {'L': self.accmags.lmag > self.thresholds[0],
-                           'R': self.accmags.rmag > self.thresholds[2]}
-        self.under_naccth = {'L': self.accmags.lmag < self.thresholds[1],
-                             'R': self.accmags.rmag < self.thresholds[3]}
+        self.over_accth = {
+                'L': self.accmags.lmag > self.thresholds['laccth'],
+                'R': self.accmags.rmag > self.thresholds['raccth']}
+        self.under_naccth = {
+                'L': self.accmags.lmag < self.thresholds['lnaccth'],
+                'R': self.accmags.rmag < self.thresholds['rnaccth']}
         self.th_crossed = {
                 'L': self.over_accth['L'] + self.under_naccth['L'] * -1,
                 'R': self.over_accth['R'] + self.under_naccth['R'] * -1}
@@ -74,21 +76,18 @@ class subject:
             sensorids = list(sensors.keys())
 
             # We need to find out which sensor was attached to which leg.
-            # First, we read the label of the first Case ID (sensorlabel)
-            sensorlabel = sensors[sensorids[0]]\
+            # First, we read the label of the second Case ID (sensorlabel)
+            sensorlabel = sensors[sensorids[1]]\
                     ['Configuration']['Config Strings'][0][2].decode()
             # Second, we compare sensorlabel with the user provided label
             # for the "right" (ex. 'right', 'R', 'Right_leg', 'derecho'...)
-            # If the two matches, then the first Case ID corresponds to
-            # the sensor attached to the right leg.
-            if label_r.lower() in sensorlabel.lower():
-                self.sensors = {'L':sensors[sensorids[1]],
-                                'R':sensors[sensorids[0]]}
+            # If the match is True, then ridx = 1, or the second Case ID.
+            # If the match if False, then ridx = 0, the first Case ID.
+            ridx = label_r.lower() in sensorlabel.lower()
+            sensordict = {'L': sensors[sensorids[not ridx]],
+                          'R': sensors[sensorids[ridx]]}
             # If the two do not match, then the first Case ID corresponds
             # to the sensor attached to the left leg.
-            else:
-                self.sensors = {'L':sensors[sensorids[0]],
-                                'R':sensors[sensorids[1]]}
 
             # Recorded timepoints in UTC!
             # self.rtime = map(self._calc_datetime, self.left['Time'])
@@ -99,13 +98,11 @@ class subject:
 
             # Index with the recording start time(in) and the end time(en)
             # Note that in_en_dts are given in UTC as well
-            row_idx = self._prep_row_idx(self.sensors['L'], in_en_dts)
+            row_idx = self._prep_row_idx(sensordict['L'], in_en_dts)
 
-            # acceleration and gyrocscope norms
-            accmags = self._get_mag(self.sensors, 'acc', row_idx)
-            angvels = self._get_mag(self.sensors, 'gyro', row_idx)
-
-            acounts = self._get_count(accmags, angvels)
+            # acceleration and gyrocscope norms / this part takes some time
+            accmags = self._get_mag(sensordict, 'acc', row_idx)
+            angvels = self._get_mag(sensordict, 'gyro', row_idx)
 
             # Storing the acceleration threshold values:
             #   [laccth, lnaccth, raccth, rnaccth]
@@ -113,11 +110,13 @@ class subject:
             self.tderivs = tderivs(accmags = accmags,
                                    thresholds = thresholds)
 
+            acounts = self._get_count(accmags, angvels)
+
             # Tmov will be 1 if acceleration value
             #  crossed thresholds (neg or pos) two times.
             # Why have it as an instance attribute? For plotting, of course.
-            tcounts = self._get_tcount(acounts)
-            self.Tmov = self._get_mov(tcounts)
+            self.tcounts = self._get_tcount(acounts)
+            self.Tmov = self._get_mov(self.tcounts)
 
             # This is a dictionary with 2 keys ("Lkinematics", "Rkinematics")
             # Each key will have a corresponding dictionary as its value
@@ -134,28 +133,30 @@ class subject:
                 a timestamp in units of microseconds since 1970-1-1-0:00 UTC
 
         Returns:
-            a datetime instance whose value is converted from the time_stamp
+            datetime_utc: datetime
+                a datetime instance whose value is converted from the time_stamp
         """
-        record_start_time = datetime.fromtimestamp(time_stamp/1e6,
-                                                   timezone.utc)
-        return record_start_time
+        datetime_utc = datetime.fromtimestamp(time_stamp/1e6, timezone.utc)
+        return datetime_utc
 
     def _get_mag(self, sensors, device, row_idx=None, det_option='median'):
         """
         A function to calculate the magnitude of a provided dtype.
 
         Parameters:
-            sensors: dictionary of h5file['sensor'] members
-                OPAL V2 Sensor recordings
-            device: {'acc', 'gyro'}
-                Accelerometer or Gyroscope data
-            row_idx: list of ints
-                Recording start and end index
-            det_option: {'median', 'customfunc'}
+            sensors: dict
+                items are the members of the group 'Sensors' in h5py.File
+            device: str
+                'acc' or 'gyro'
+            row_idx: list
+                Recording start and end indices (each int)
+            det_option: str
+                'median' or 'customfunc'
                 Subtract median or use some custom method to detrend
 
         Returns:
-            detrended magnitude of acceleration or angular velocity
+            out: pd.DataFrame
+                detrended acceleration or angular velocity norm
         """
         # check if dtype_label is correctly provided.
         assert(device in ['acc', 'gyro']),\
@@ -196,11 +197,11 @@ class subject:
     # winsize in second unit
     def _mov_avg_filt(self, winsize, pd_series):
         win_len = int(20 * winsize)   # sfreq = 20Hz
-        return(pd_series.rolling(win_len).mean())
+        return pd_series.rolling(win_len).mean()
 
     def _calc_ind_threshold(self, maxprop, ivan=False):
-        return(np.mean(maxprop['peak_heights'])
-               - (1-ivan + 0.5*ivan)*np.std(maxprop['peak_heights']))
+        return np.mean(maxprop['peak_heights'])\
+                - (1-ivan + 0.5*ivan)*np.std(maxprop['peak_heights'])
 
     def get_ind_acc_threshold_ivan(self, accmags, winsize=0.5, height=1.0):
         """
@@ -240,7 +241,7 @@ class subject:
                 minimal height that defines a peak
 
         Returns:
-            a list of thresholds
+            thresholds: dict
                 laccth: left positive threshold
                 lnaccth: left negative threshold
                 raccth: right positive threshold
@@ -256,19 +257,24 @@ class subject:
         mags2['rnegpks'] = mags2.rmag.apply(
                 lambda x: abs(x) if -reject < x < 0 else 0)
 
-        pnpks = mags2.iloc[:, ['lpospks',
-                               'lnegpks',
-                               'rpospks',
-                               'rnegpks']].apply(
-                                       lambda x: find_peaks(x,
-                                                            height=height)[1])
+        pnpks = mags2.loc[:, ['lpospks',
+                              'lnegpks',
+                              'rpospks',
+                              'rnegpks']].apply(
+                                      lambda x: find_peaks(x,
+                                                           height=height)[1])
 
         laccth  = self._calc_ind_threshold(pnpks['lpospks'])
         lnaccth = self._calc_ind_threshold(pnpks['lnegpks']) * -1
         raccth  = self._calc_ind_threshold(pnpks['rpospks'])
         rnaccth = self._calc_ind_threshold(pnpks['rnegpks']) * -1
 
-        return ([laccth, lnaccth, raccth, rnaccth])
+        thresholds = {'laccth': laccth,
+                      'lnaccth': lnaccth,
+                      'raccth': raccth,
+                      'rnaccth': rnaccth}
+
+        return thresholds
 
     def _prep_row_idx(self, sensorobj, in_en_dts):
         """
@@ -311,8 +317,9 @@ class subject:
                 lambda x: x - self._calc_datetime(sensorobj['Time'][0]), in_en_dts))
             convert = 1e6    # conversion constant: 1 second = 1e6 microseconds
             microlen = 0.05 * convert    # duration of a data point in microseconds
-            poten = round((d_in_micro[1].seconds*convert
-                           + d_in_micro[1].microseconds)/microlen)
+            poten = np.ceil((d_in_micro[1].seconds*convert
+                           + d_in_micro[1].microseconds)/microlen)\
+                                   .astype('int')
             if poten < sensorobj['Time'].shape[0]:
                 indices = list(map(
                     lambda x: round(
@@ -419,10 +426,10 @@ class subject:
             arr_len = len(over_th_arr)
             t_count = np.zeros(len(acounts))
             for i, j in enumerate(over_th_arr):
-                # "over_th_array" has the indices of the acceleration values
+                # "over_th_arr" has the indices of the acceleration values
                 #   that are over a threshold (left or right).
                 # [j] gives one of those indices while [i] indicates
-                #   the order of [j] in "over_th_array".
+                #   the order of [j] in "over_th_arr".
                 # It could be that the Tcount value at the current index
                 #   may have been set by the previous index
                 #   (ex. [j-2] satisfied the "else" condition so Tcount[j] = 1 or -1)
@@ -479,7 +486,7 @@ class subject:
         def mark_tmov(temp):
             tmov = np.zeros(len(temp))
             # Among non-zero Tcount (-1 or 1) values...
-            nz_tcount = np.nonzero(temp)[0]
+            nz_tcount = np.where(temp)[0]
             for i, j in enumerate(nz_tcount[:-1]):
             # If the difference between the current point and
             #   its subsequent one is greater than 8 data points,

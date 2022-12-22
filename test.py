@@ -1,65 +1,93 @@
-# Isn't it better if we just read it from h5 file directly???
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.patches import Rectangle
 
-#sys.path.append('..')
-# This is the script I wrote to read raw data from h5 file directly
-#   and do some pre-processing (up to magnitude calculation)
-from incwear import *
+from incwear.subject import subject, make_start_end_datetime
 
 # Move to the directory where the h5 files are stored
 #   so that you can later use dir to list all filenames at once and loop around
-filename = '/Users/joh/Documents/PYTHON_porting/MATLAB/h5files/20201111-113232_117v1.h5'
+FNAME = '/Users/joh/Documents/PYTHON_porting/MATLAB/h5files/20201111-113232_117v1.h5'
 
 # Before reading an individual h5 file, we need to read the csv file from REDCap.
 redcap_file = pd.read_csv('~/Downloads/mixed_bag.csv')
 
 # time_pts_dt will be in the datetime format
 #   (ex. datetime(2020, 2, 17, 10, 23, 00, tzinfo=datetime.timezone.utc))
-time_pts_dt = make_start_end_datetime(redcap_file, filename, 'America/Guatemala')
+time_pts_dt = make_start_end_datetime(redcap_file, FNAME, 'America/Guatemala')
 
-# Up to this point works (Oct.18, 22)
-test = Subject(filename, time_pts_dt)   # input: a h5 filename (required)
-                                        #      : time_pts_dt (optional), det_option (optional, default = 'median')
-                                        # You either specify the datetimes of recording start and end
-                                        # or it will simply analyze the entire recording.
-                                        # To test another scenario, try running it without any parameter.
-                                        # You can also specify the detrending option. Default is subtracting the 'median'
-'''
-Once you generate a [Subject] object, it will contain some useful variables.
-1. accmags: a DataFrame storing the accelerometer signal norms (L/R)
-2. laccth : left accelerometer value threshold
-3. raccth : right accelerometer value threshold
-4. lnaccth: left accelerometer value negative threshold
-5. rnaccth: right accelerometer value negative threshold
-6. Tmov : counts that correspond to full movements
-'''
-sensors = test.sensors
-rowidx = test._prep_row_idx(sensors['L'], time_pts_dt)
-accmags = test._get_mag(sensors['L']['Accelerometer'], sensors['R']['Accelerometer'], rowidx)
-a = 137800
-b = 137900
+# The class:subject takes three parameters.
+#   1) h5 filename
+#   2) a list of datetime objects that mark
+#       the start and the end of recording
+#   3) a string used to indicate the "right" side
+LABEL_R = 'derecho'
+test = subject(FNAME, time_pts_dt, LABEL_R)
+
+# a subject contains the following attributes:
+# tderivs (class)
+#   - accmags (pd.DataFrame): detrended acc norms
+#                           colnames = ['lmag', 'rmag']
+#   - thresholds (dict): four acc thresholds;
+#                           keys = ['laccth', 'lnaccth', 'raccth', 'rnaccth']
+#   - over_accth (dict): data point greater than a positive threshold (T/F)
+#                           keys = ['L', 'R']
+#   - under_naccth (dict): data point smaller than a negative threshold (T/F)
+#                           keys = ['L', 'R']
+#   - th_crossed (dict): over a positive threshold (+1),
+#                        under a negative one (-1),
+#                        neither (0)
+#                           keys = ['L', 'R']
+
+# Tmov (pd.DataFrame): second crossing of a threshold per movement marked
+#                           keys = ['L', 'R']
+# kinematics (dict): kinematic variables
+
+# If you want to do it step by step...
+import h5py
+from datetime import datetime, timezone
+f = h5py.File(FNAME, 'r')
+sensors = f['Sensors']
+sensorids = list(sensors.keys())
+label = sensors[sensorids[1]]['Configuration']\
+        ['Config Strings'][0][2].decode()
+ridx = LABEL_R in label
+sensordict = {'L': sensors[sensorids[not ridx]],
+              'R': sensors[sensorids[ridx]]}
+# Up to this point, same result as the MATLAB code
+rowidx = test._prep_row_idx(sensordict['L'], time_pts_dt)
+print(datetime.fromtimestamp(sensordict['L']['Time'][1]/1e6, timezone.utc))
+
+accmags = test._get_mag(sensordict, 'acc', rowidx)
+angvels = test._get_mag(sensordict, 'gyro', rowidx)
+acounts = test._get_count(accmags, angvels)
+tcounts = test._get_tcount(acounts)
+
+
+rowidx[0]
+accmags = test.tderivs.accmags
+
+a = 399641
+b = 399878
 fig, ax = plt.subplots(2)
 ax[0].plot(accmags.lmag[a:b], marker='o', c = 'pink')
-ax[0].axhline(y=test.thresholds.laccth, color = 'b', linestyle='--')
-ax[0].axhline(y=test.thresholds.lnaccth, color = 'b', linestyle='--')
+ax[0].axhline(y=test.tderivs.thresholds['laccth'], color = 'b', linestyle='--')
+ax[0].axhline(y=test.tderivs.thresholds['lnaccth'], color = 'b', linestyle='--')
 #ax[0].stem(np.arange(a, b), tcount.L[a:b])
 ax[0].stem(np.arange(a, b), test.Tmov.L[a:b]*2, markerfmt = '+')
-rect1 = Rectangle((137839, 0), width=3, height=1, ec='g', fc='none', lw=2)
-rect2 = Rectangle((137845, 0), width=5, height=1, ec='g', fc='none', lw=2)
-ax[0].add_patch(rect1)
-ax[0].add_patch(rect2)
+#rect1 = Rectangle((137839, 0), width=3, height=1, ec='g', fc='none', lw=2)
+#rect2 = Rectangle((137845, 0), width=5, height=1, ec='g', fc='none', lw=2)
+#ax[0].add_patch(rect1)
+#ax[0].add_patch(rect2)
 ax[1].plot(accmags.rmag[a:b], marker='o', c='pink')
-ax[1].axhline(y=test.thresholds.raccth, color = 'b', linestyle='--')
-ax[1].axhline(y=test.thresholds.rnaccth, color = 'b', linestyle='--')
+ax[1].axhline(y=test.tderivs.thresholds['raccth'], color = 'b', linestyle='--')
+ax[1].axhline(y=test.tderivs.thresholds['rnaccth'], color = 'b', linestyle='--')
 #ax[1].stem(np.arange(a, b), tcount.R[a:b])
 ax[1].stem(np.arange(a, b), test.Tmov.R[a:b]*2, markerfmt = '+')
-rect1 = Rectangle((137845, 0), width=4, height=1, ec='g', fc='none', lw=2)
-rect2 = Rectangle((137839, 0), width=5, height=1, ec='g', fc='none', lw=2)
-ax[1].add_patch(rect1)
-ax[1].add_patch(rect2)
+#rect1 = Rectangle((137845, 0), width=4, height=1, ec='g', fc='none', lw=2)
+#rect2 = Rectangle((137839, 0), width=5, height=1, ec='g', fc='none', lw=2)
+#ax[1].add_patch(rect1)
+#ax[1].add_patch(rect2)
 plt.show()
 
 test.kinematics['Rkinematics']['avepMov']
