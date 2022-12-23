@@ -401,10 +401,22 @@ class subject:
         # Let's start with collecting all acc values that went over the threshold
         # The output of np.where would be a tuple - so take the first value
         # I do this to reduce the preprocessing time...
-        over_posth_l = np.where(self.tderivs.over_accth['L'])[0]
-        over_posth_r = np.where(self.tderivs.over_accth['R'])[0]
-        under_negth_l = np.where(self.tderivs.under_naccth['L'])[0]
-        under_negth_r = np.where(self.tderivs.under_naccth['R'])[0]
+        temp_posth_l = np.where(self.tderivs.over_accth['L'])[0]
+        temp_posth_r = np.where(self.tderivs.over_accth['R'])[0]
+        temp_negth_l = np.where(self.tderivs.under_naccth['L'])[0]
+        temp_negth_r = np.where(self.tderivs.under_naccth['R'])[0]
+
+        # angular velocity should be taken into account...
+        # let's just make sure that the detrended angvel[i] > 0
+        angvel_gt_l = np.where(acounts.lcount != 0)[0]
+        angvel_gt_r = np.where(acounts.rcount != 0)[0]
+
+        over_posth_l, under_negth_l =\
+                list(map(lambda x: np.intersect1d(x, angvel_gt_l),
+                         [temp_posth_l, temp_negth_l]))
+        over_posth_r, under_negth_r =\
+                list(map(lambda x: np.intersect1d(x, angvel_gt_r),
+                         [temp_posth_r, temp_negth_r]))
 
         def mark_tcount(over_th_arr, acounts, pos=True):
             """
