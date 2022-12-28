@@ -30,12 +30,12 @@ Original script exports the following values:
 import re
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
+from itertools import chain
 import numpy as np
 import pandas as pd
 import h5py
 import matplotlib.pyplot as plt
 from scipy.signal import find_peaks, detrend
-from itertools import chain, groupby
 import pytz
 #filename = '/Users/joh/Downloads/20220322-084542_LL020_M2_D2.h5'
 
@@ -75,7 +75,7 @@ class SubjectInfo:
 class opalv2:
     """
     A class that will store (preliminarily) processed data
-        recorded in the OPAL V2sensors 
+        recorded in the OPAL V2sensors
     """
     def __init__(self, filename, in_en_dts, label_r):
 
@@ -202,9 +202,9 @@ class opalv2:
         if det_option == 'median':
             out = map(lambda x: x - np.median(x), [lmag, rmag])
         else:
-            out = map(lambda x: detrend(x), [lmag, rmag])
+            out = map(detrend, [lmag, rmag])
 
-        return {x:y for x, y in zip(['lmag', 'rmag'], out)}
+        return dict(zip(['lmag', 'rmag'], out))
 
     # winsize in second unit
     def _mov_avg_filt(self, winsize, pd_series):
@@ -396,32 +396,33 @@ class opalv2:
             tcounts: dict
                 keys: count, tcount
         """
-        # raw_counts = map(np.sign, self.measures.accmags.values())
-        # acounts = [np.multiply(x, y) for x, y in\
-        #         zip(raw_counts,
-        #             map(lambda x: np.greater(x, 0),
-        #                 self.measures.velmags.values()))]
         acounts = self._get_count()
 
         # Let's start with collecting all acc values that went over the threshold
         # The output of np.where would be a tuple - so take the first value
         # I do this to reduce the preprocessing time...
-        temp_posth_l = np.where(self.measures.over_accth['L'])[0]
-        temp_posth_r = np.where(self.measures.over_accth['R'])[0]
-        temp_negth_l = np.where(self.measures.under_naccth['L'])[0]
-        temp_negth_r = np.where(self.measures.under_naccth['R'])[0]
+        #temp_posth_l = np.where(self.measures.over_accth['L'])[0]
+        #temp_posth_r = np.where(self.measures.over_accth['R'])[0]
+        #temp_negth_l = np.where(self.measures.under_naccth['L'])[0]
+        #temp_negth_r = np.where(self.measures.under_naccth['R'])[0]
+
+        temp_l = map(lambda x: np.where(x)[0],
+                [self.measures.over_accth['L'],
+                    self.measures.under_naccth['L']])
+
+        temp_r = map(lambda x: np.where(x)[0],
+                [self.measures.over_accth['R'],
+                    self.measures.under_naccth['R']])
 
         # angular velocity should be taken into account...
         # let's just make sure that the detrended angvel[i] > 0
         angvel_gt_l = np.nonzero(acounts[0])[0]
         angvel_gt_r = np.nonzero(acounts[1])[0]
 
-        over_posth_l, under_negth_l =\
-                map(lambda x: np.intersect1d(x, angvel_gt_l),
-                    [temp_posth_l, temp_negth_l])
-        over_posth_r, under_negth_r =\
-                list(map(lambda x: np.intersect1d(x, angvel_gt_r),
-                         [temp_posth_r, temp_negth_r]))
+        over_posth_l, under_negth_l = map(lambda x:
+                np.intersect1d(x, angvel_gt_l), temp_l)
+        over_posth_r, under_negth_r = map(lambda x:
+                np.intersect1d(x, angvel_gt_r), temp_r)
 
         def mark_tcount(over_th_arr, acounts, pos=True):
             """
@@ -507,25 +508,6 @@ class opalv2:
                 movement counts (L/R)
         """
 
-        def mark_tmov(temp):
-            tmov = np.zeros(len(temp))
-            # Among non-zero Tcount (-1 or 1) values...
-            nz_tcount = np.where(temp)[0]
-            for i, j in enumerate(nz_tcount[:-1]):
-            # If the difference between the current point and
-            #   its subsequent one is greater than 8 data points,
-            #   skip the current point.
-                if (np.diff([j, nz_tcount[i+1]])[0] > 8) or (tmov[j] == 1):
-                    continue
-                # If not, if the sign of the two adjacent points differ
-                #   (-1 vs. 1 or vice versa; 0 cannot be included because
-                #   points attempt nonzeroTC cannot be 0)
-                else:
-                    if np.sign(temp[j]) != np.sign(temp[nz_tcount[i+1]]):
-                        tmov[nz_tcount[i+1]] = 1
-                    else:
-                        continue
-            return tmov
         assert(side in ['L', 'R']), "side should be 'L' or 'R'"
 
         # tcounts is a dictionary (keys: 'L', 'R')
@@ -628,62 +610,61 @@ class opalv2:
 
         movidx = self.get_mov(side)
         if side == 'L':
-            accvec = self.measures.accmags['lmag'].copy()
-            velvec = self.measures.velmags['lmag'].copy()
-            posthr = self.measures.thresholds['laccth']
-            negthr = self.measures.thresholds['lnaccth']
+            labels = ['lmag', 'laccth', 'lnaccth']
         else:
-            accvec = self.measures.accmags['rmag'].copy()
-            velvec = self.measures.velmags['rmag'].copy()
-            posthr = self.measures.thresholds['raccth']
-            negthr = self.measures.thresholds['rnaccth']
+            labels = ['rmag', 'raccth', 'rnaccth']
 
         if self.info.rowidx is not None:
-            new_t = self.info.record_times[0]\
-                    + timedelta(seconds=time_passed)
-            end_t = self.info.record_times[1]
+            #new_t = self.info.record_times[0]\
+            #        + timedelta(seconds=time_passed)
+            #end_t = self.info.record_times[1]
             startidx = time_passed * 20
             endidx = startidx + duration * 20 + 1
-            st = np.where(movidx[:,0] >= startidx)[0]
-            fi = np.where(movidx[:,2] <= endidx)[0]
+            mov_st = np.where(movidx[:,0] >= startidx)[0]
+            mov_fi = np.where(movidx[:,2] <= endidx)[0]
 
-            fig, ax = plt.subplots(1)
-            accline, = ax.plot(accvec[startidx:endidx], marker='o', c='pink',
-                               label='acceleration')
-            pthline = ax.axhline(y=posthr, c='k', linestyle='dotted',
-                                 label='positive threshold')
-            nthline = ax.axhline(y=negthr, c='k', linestyle='dashed',
-                                 label='negative threshold')
+            _, ax = plt.subplots(1)
+            accline, = ax.plot(self.measures.accmags[labels[0]][startidx:endidx],
+                    marker='o', c='pink', label='acceleration')
+            pthline = ax.axhline(y=self.measures.thresholds[labels[1]],
+                    c='k', linestyle='dotted', label='positive threshold')
+            nthline = ax.axhline(y=self.measures.thresholds[labels[2]],
+                    c='k', linestyle='dashed', label='negative threshold')
             ax.axhline(y=0, c='r')  # baseline
-            velline, = ax.plot(velvec[startidx:endidx], c='deepskyblue',
-                               linestyle='dashdot', label='angular velocity')
+            velline, = ax.plot(self.measures.velmags[labels[0]][startidx:endidx],
+                    c='deepskyblue', linestyle='dashdot', label='angular velocity')
             ax.legend(handles = [accline, pthline, nthline, velline])
 
-            if st.size:
-                if st[0] == fi[-1]:
-                    mov_lens = movidx[st[0],2] - movidx[st[0],0]
+            if mov_st.size:
+                if mov_st[0] == mov_fi[-1]:
+                    mov_lens = movidx[mov_st[0],2] - movidx[mov_st[0],0]
                 else:
-                    fi2 = fi[-1] + 1
-                    mov_lens = movidx[st[0]:fi2,2] - movidx[st[0]:fi2,0]
+                    fi2 = mov_fi[-1] + 1
+                    mov_lens = movidx[mov_st[0]:fi2,2] - movidx[mov_st[0]:fi2,0]
                 if mov_lens.size:
                     if mov_lens.size == 1:
-                        hull = np.arange(movidx[st[0],0],
-                                         movidx[st[0],0] + mov_lens + 1)
-                        hl, = ax.plot(hull - startidx, accvec[hull], c='g',
-                                      linewidth=2, label='movement')
+                        hull = np.arange(movidx[mov_st[0],0],
+                                         movidx[mov_st[0],0] + mov_lens + 1)
+                        hl, = ax.plot(hull - startidx,
+                                self.measures.accmags[labels[0]][hull],
+                                c='g', linewidth=2, label='movement')
                         ax.legend(handles = [accline, pthline, nthline,
                                              velline, hl])
                     else:
                         hull = [np.arange(x, (x+mov_lens[i]+1))\
-                                for i, x in enumerate(movidx[st[0]:fi2,0])]
-                        hl, = ax.plot(hull[0] - startidx, accvec[hull[0]],
-                                      c='g', linewidth=2, label='movement')
+                                for i, x in enumerate(movidx[mov_st[0]:fi2,0])]
+                        hl, = ax.plot(hull[0] - startidx,
+                                self.measures.accmags[labels[0]][hull[0]],
+                                c='g', linewidth=2, label='movement')
                         ax.legend(handles = [accline, pthline, nthline,
                                              velline, hl])
                         for j in range(1, len(hull)):
-                            ax.plot(hull[j]-startidx, accvec[hull[j]], c='g',
-                                    linewidth=2)
-            title = f"{duration}s from {new_t.ctime()} UTC\n(recording ended at {end_t.ctime()} UTC)"
+                            ax.plot(hull[j]-startidx,
+                                    self.measures.accmags[labels[0]][hull[j]],
+                                    c='g', linewidth=2)
+            title = f"{duration}s from"\
+                    f"{(self.info.record_times[0] + timedelta(seconds=time_passed)).ctime()}"\
+                    f"UTC\n(recording ended at {self.info.record_times[1].ctime()}UTC)"
             ax.set_title(title)
             ax.set_xlabel("Time since onset (sec)")
             ax.set_ylabel("Acc. magnitude (m/s^2)")
