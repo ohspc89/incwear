@@ -443,11 +443,10 @@ class opalv2:
                 corrsign = 1
             arr_len = len(over_th_arr)
             t_count = np.zeros(len(acounts))
-            for i, j in enumerate(over_th_arr):
+            for j in over_th_arr:
                 # "over_th_arr" has the indices of the acceleration values
                 #   that are over a threshold (left or right).
-                # [j] gives one of those indices while [i] indicates
-                #   the order of [j] in "over_th_arr".
+                # [j] gives one of those indices.
                 # It could be that the Tcount value at the current index
                 #   may have been set by the previous index
                 #   (ex. [j-2] satisfied the "else" condition so Tcount[j] = 1 or -1)
@@ -456,23 +455,11 @@ class opalv2:
                 #   Tcount[j] is considered as a redundant count and
                 #   marked off (this is from the original MATLAB code).
                 #   So we can skip such indices here.
-                if not any((t_count[j] == corrsign,
-                           all((i<=(arr_len-2), t_count[j+1]==corrsign)))):
+                if all((j < (arr_len-2), all(t_count[j:j+2] != corrsign))):
                     if all(acounts[j:j+3] == corrsign):
                         t_count[j+2] = corrsign
                     else:
                         t_count[j] = corrsign
-
-                # if (t_count[j] == corrsign) or\
-                #         ((i <= (arr_len-2)) and (t_count[j+1] == corrsign)):
-                #     continue
-                # else:
-                #     # If three consecutive data are 1 or -1,
-                #     #   the third data point's Tcount would be 1 or -1
-                #     if np.all(acounts[j:j+3] == corrsign):
-                #         t_count[j+2] = corrsign
-                #     else:
-                #         t_count[j] = corrsign
 
             #nz_tcount = np.where(t_count != 0)[0]    # non-zero Tcounts
             nz_tcount = np.nonzero(t_count)[0]
@@ -662,9 +649,9 @@ class opalv2:
                             ax.plot(hull[j]-startidx,
                                     self.measures.accmags[labels[0]][hull[j]],
                                     c='g', linewidth=2)
-            title = f"{duration}s from"\
+            title = f"{duration}s from "\
                     f"{(self.info.record_times[0] + timedelta(seconds=time_passed)).ctime()}"\
-                    f"UTC\n(recording ended at {self.info.record_times[1].ctime()}UTC)"
+                    f" UTC\n(recording ended at {self.info.record_times[1].ctime()} UTC)"
             ax.set_title(title)
             ax.set_xlabel("Time since onset (sec)")
             ax.set_ylabel("Acc. magnitude (m/s^2)")
@@ -676,8 +663,6 @@ class opalv2:
 
         else:
             raise Exception("Please check your REDCap export. No time_donned was provided")
-
-
 
 
     def _raw_mov_kinematics(self, accmags, acounts):
@@ -790,7 +775,7 @@ class opalv2:
 
         return kinematics
 
-    def _mark_simultaneous(self):
+    def mark_simultaneous(self):
         """
         We need to re-evaluate how we operationalize simultaneity of bouts.
         Let's suppose that at the index j, Tmov.L[j] = 1
