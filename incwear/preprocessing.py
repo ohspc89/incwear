@@ -441,8 +441,8 @@ class opalv2:
             corrsign = -1
             if pos:
                 corrsign = 1
-            arr_len = len(over_th_arr)
-            t_count = np.zeros(len(acounts))
+            arr_len = len(acounts)
+            t_count = np.zeros(arr_len)
             for j in over_th_arr:
                 # "over_th_arr" has the indices of the acceleration values
                 #   that are over a threshold (left or right).
@@ -505,23 +505,41 @@ class opalv2:
         arr_a = np.column_stack((np.arange(len(tcounts[side][0])),
                                  tcounts[side][0],  # counts
                                  tcounts[side][1],  # tcounts
-                                 self.measures.th_crossed[side]))
+                                 self.measures.th_crossed[side])).astype(int)
         arr_b = arr_a[np.nonzero(arr_a[:,2])[0], :]
         movidx = np.zeros((arr_b.shape[0], 3), dtype=int)
 
         for i in range(arr_b.shape[0]-1):
             pairdiff = np.diff(arr_b[i:i+2,:], axis=0).ravel()
             # Two Tcounts are different (-1 vs. 1)
-            if all((pairdiff[2] != 0, pairdiff[0] <= 14)):
-                sidx = int(arr_b[i+1, 0])     # second threshold crossing
-                addi = int(sidx + 30 - pairdiff[0])  # a mov < 30 data points
+            if all((pairdiff[2] != 0, pairdiff[0] <= 8)):
+                sidx = arr_b[i+1, 0]     # second threshold crossing
                 if arr_b[i,3] == arr_b[i,2]:  # if th_cross == t_count
-                    movstart = arr_b[i,0]
+                    first_tc = arr_b[i,0]
                 else:
-                    if arr_a[int(arr_b[i,0]-1),3] == arr_b[i,2]:
-                        movstart = arr_b[i,0]-1
+                    if arr_a[arr_b[i,0]-1,3] == arr_b[i,2]:
+                        first_tc = arr_b[i,0]-1
                     else:
-                        movstart = arr_b[i,0]-2
+                        first_tc = arr_b[i,0]-2
+                fstep = 8 - sidx + first_tc
+                if all((0 < fstep < first_tc,
+                    arr_a[(first_tc-1),1] == arr_a[first_tc,1])):
+                    # diffcnt is the index of the point whose count value is_dst
+                    # different from that of first_tc, implying that
+                    # the baseline is 'crossed'. This should NOT happen.
+                    # Therefore, find one point behind sidx and set that as
+                    # the start of a movement
+                    diffcnt = np.where(arr_a[(first_tc-fstep):first_tc,1] !=
+                            arr_b[i,2])[0]
+                    if diffcnt.size:
+                        movstart = first_tc - fstep + diffcnt[-1] + 1
+                    # If you don't find a point whose count value is different,
+                    # simply go back by the amount of step
+                    else:
+                        movstart = first_tc - fstep
+                else:
+                    movstart = first_tc
+                addi = int(sidx + 30 - pairdiff[0])  # a mov < 30 data points
                 try:
                     movend = np.where(
                             arr_a[sidx:addi,1] == -arr_a[sidx,2])[0][0]
