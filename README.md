@@ -1,6 +1,6 @@
 # incwear
-This is the repository prepared to preprocess and further analyze wearable sensor (APDM Opal V2) data from infants.
-Codes are written in Python, and they are based on the original MATLAB code of the Infant Neuromotor Control Laboratory (INC Lab).
+This is a Python package prepared to preprocess and further analyze wearable sensor (APDM Opal V2 or Axivity Ax6) data from infants.
+Scripts were adapted from the original MATLAB code of the Infant Neuromotor Control Laboratory (INC Lab), Children's Hospital Los Angeles, Los Angeles, CA
 
 INC (Lab) + WEARable = "incwear"
 
