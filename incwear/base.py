@@ -27,17 +27,15 @@ Original script exports the following values:
     - id ['Sensors' - 'Name']
     - iButtonPressed ['Annotations']
 """
+from dataclasses import dataclass, field
 import re
 from datetime import datetime, timedelta, timezone
-from dataclasses import dataclass, field
 from itertools import chain
 import numpy as np
 import pandas as pd
-import h5py
 import matplotlib.pyplot as plt
 from scipy.signal import find_peaks, detrend
 import pytz
-#filename = '/Users/joh/Downloads/20220322-084542_LL020_M2_D2.h5'
 
 @dataclass
 class Processed:
@@ -67,102 +65,85 @@ class Processed:
 @dataclass
 class SubjectInfo:
     """ Storing miscellaneous information """
-    fname: str
-    record_times: list
-    label_r: str
+    fname: list
+    record_times: dict
+    label_r: str | None
     rowidx: list | None
+    recordlen: dict
 
-class opalv2:
-    """
-    A class that will store (preliminarily) processed data
-        recorded in the OPAL V2sensors
-    """
-    def __init__(self, filename, in_en_dts, label_r):
+class BaseProcess:
+    """ Inherited by classes: axivity.Ax6, apdm.OpalV2 """
+    def __str__(self):
+        return self._name
 
-        with h5py.File(filename, 'r') as h5file:
-            # Sensors has TWO members.
-            # Each subgroup has a name with the format: XI-XXXXXX
-            # The number after the dash is the Case ID
-            sensors = h5file['Sensors']
-            sensorids = list(sensors.keys())
+    def __repr__(self):
+        ret = f"{self._name}("
+        for k in self._kw:
+            ret += f"{k}={self._kw[k]!r}, "
+        if ret[-1] != "(":
+            ret = ret[:-2]
+        ret += ")"
+        return ret
 
-            # We need to find out which sensor was attached to which leg.
-            # First, we read the label of the second Case ID (sensorlabel)
-            sensorlabel = sensors[sensorids[1]]\
-                    ['Configuration']['Config Strings'][0][2].decode()
-            # Second, we compare sensorlabel with the user provided label
-            # for the "right" (ex. 'right', 'R', 'Right_leg', 'derecho'...)
-            # If the match is True, then ridx = 1, or the second Case ID.
-            # If the match if False, then ridx = 0, the first Case ID.
-            ridx = label_r.lower() in sensorlabel.lower()
-            sensordict = {'L': sensors[sensorids[not ridx]],
-                          'R': sensors[sensorids[ridx]]}
+    def __eq__(self, other):
+        if isinstance(other, type(self)):
+            return self._kw == other._kw
+        else:
+            return False
 
-            # Index with the recording start time(in) and the end time(en)
-            # Note that in_en_dts are given in UTC as well
-            rowidx = self._prep_row_idx(sensordict['L'], in_en_dts)
+    def __init__(self, **kwargs):
+        """ BaseProcess will be inherited """
+        self._name = self.__class__.__name__
+        self._kw = kwargs
 
-            # Accelerometer and Gyrocscope norms / this part takes some time
-            accmags = self._get_mag(sensordict, 'acc', rowidx)
-            velmags = self._get_mag(sensordict, 'gyro', rowidx)
+        # Placehodler - will be updated
+        self.info = SubjectInfo(
+            fname = 'no_filename',
+            record_times = {'L': None, 'R': None},
+            label_r = None,
+            rowidx = None,
+            recordlen = {'L': 0, 'R': 0})
 
-            # Storing the acceleration threshold values:
-            #   [laccth, lnaccth, raccth, rnaccth]
-            thresholds = self._get_ind_acc_threshold(accmags)
+        self.measures = Processed(
+            accmags = {'lmag': np.array([0,0,0,0,0]), 
+                'rmag': np.array([0,0,0,0,0])},
+            velmags = {'lmag': np.array([0,0,0,0,0]),
+                'rmag': np.array([0,0,0,0,0])},
+            thresholds = {'laccth': 1,
+                'lnaccth': -1,
+                'raccth': 1,
+                'rnaccth': -1})
 
-            if rowidx is not None:
-                record_ts = [in_en_dts[0] + timedelta(seconds=rowidx[0]*0.05),
-                             in_en_dts[1]]
-
-            self.info = SubjectInfo(fname = filename,
-                                    record_times = record_ts,
-                                    label_r = label_r,
-                                    rowidx = rowidx)
-
-            self.measures = Processed(accmags = accmags,
-                                      velmags = velmags,
-                                      thresholds = thresholds)
-
-            #acounts = self._get_count(accmags, angvels)
-
-            # Tmov will be 1 if acceleration value
-            #  crossed thresholds (neg or pos) two times.
-            # Why have it as an instance attribute? For plotting, of course.
-            #self.tcounts = self._get_tcount(acounts)
-            #self.Tmov = self._get_mov(self.tcounts)
-
-            # This is a dictionary with 2 keys ("Lkinematics", "Rkinematics")
-            # Each key will have a corresponding dictionary as its value
-            #   [MovIdx, MovLength, MovStart, MovEnd, avepMov, peakpMov]
-            #self.kinematics = self._raw_mov_kinematics(accmags, acounts)
 
     # This function will calculate the actual date and time from the time recorded in the sensor
-    def _calc_datetime(self, time_stamp):
+    def _calc_datetime(self, timestamp):
         """
         A function to convert a timestamp into a datetime instance
 
         Parameters:
-            time_stamp: int
+            timestamp: int
                 a timestamp in units of microseconds since 1970-1-1-0:00 UTC
 
         Returns:
             datetime_utc: datetime
                 a datetime instance whose value is converted from the time_stamp
         """
-        datetime_utc = datetime.fromtimestamp(time_stamp/1e6, timezone.utc)
+        if self._name == 'OpalV2':
+            ts = timestamp/1e6
+        else:
+            ts = timestamp
+        datetime_utc = datetime.fromtimestamp(ts, timezone.utc)
         return datetime_utc
 
-    def _get_mag(self, sensors, device, row_idx=None, det_option='median'):
+    def _get_mag(self, sensors, row_idx=None, det_option='median'):
         """
         A function to calculate the magnitude of a provided dtype.
 
         Parameters:
             sensors: dict
-                items are the members of the group 'Sensors' in h5py.File
-            device: str
-                'acc' or 'gyro'
-            row_idx: list
-                Recording start and end indices (each int)
+                itmes are three-column arrays of acc/gyro data
+            row_idx: list | None
+                Recording start and end indices (each int, for OpalV2)
             det_option: str
                 'median' or 'customfunc'
                 Subtract median or use some custom method to detrend
@@ -172,29 +153,24 @@ class opalv2:
                 detrended acceleration or angular velocity norm
                 keys = ['lmag', 'rmag']
         """
-        # check if dtype_label is correctly provided.
-        assert(device in ['acc', 'gyro']),\
-                "device is either 'acc' or 'gyro'"
-        if device == 'acc':
-            dtype = 'Accelerometer'
-        else:
-            dtype = 'Gyroscope'
-
-        # sensors['L'][dtype] will be a N x 3 matrix whose entries are
-        # either accelerations or angular velocities along x, y, z axes.
-        # nrow is equal to N
-        nrow = sensors['L'][dtype].shape[0]
-
         if det_option not in ['median', 'customfunc']:
             det_option='median'
             print("Unknown detrending option - setting it to [median]")
 
-        if row_idx is None:
-            row_idx = list(range(nrow))    # targeting the entire dataset
+        # Axivity sensors differ in length.
+        # Let's create another function and use map()
+        def linalg_norm(arr, row_idx):
+            nrow = arr.shape[0]
+
+            if row_idx is None:
+                row_idx = list(range(nrow)) # targeting the entire dataset
+            mag = np.linalg.norm(arr[row_idx], axis=1)
+            return mag
 
         # Use np.linalg.norm... amazing!
-        lmag, rmag = map(lambda x: np.linalg.norm(x[row_idx], axis=1),
-                         [x[dtype] for x in sensors.values()])
+        lmag, rmag = map(linalg_norm,
+                list(sensors.values()),
+                [row_idx, row_idx])
 
         # MATLAB's detrend function is not used,
         #   so we can consider that the default option
@@ -211,7 +187,7 @@ class opalv2:
         win_len = int(20 * winsize)   # sfreq = 20Hz
         return pd_series.rolling(win_len).mean()
 
-    def _calc_ind_threshold(self, maxprop, ivan=False):
+    def _calc_ind_threshold(self, maxprop):
         """
         ind_threshold = mean(peak_heights) - C * std(peak_heights)
 
@@ -219,31 +195,7 @@ class opalv2:
             0.5     Trujillo-Priego et al. (2017), ivan=True
         """
         return np.mean(maxprop['peak_heights'])\
-                - (1-ivan + 0.5*ivan)*np.std(maxprop['peak_heights'])
-
-    def get_ind_acc_threshold_ivan(self, accmags, winsize=0.5, height=1.0):
-        """
-        All relevant parameter values coming from Trujillo-Priego et al., (2017)
-        Needs further development
-        """
-        reject = [-1.02, 1.32]
-
-        mags2 = accmags.copy()
-        mags2['rectlmag'] = mags2.lmag.apply(
-                lambda x: abs(x) if x > max(reject) or x < min(reject) else 0)
-        mags2['rectrmag'] = mags2.rmag.apply(
-                lambda x: abs(x) if x > max(reject) or x < min(reject) else 0)
-
-        mags2['avglmag'] = self._mov_avg_filt(winsize, mags2['rectlmag'])
-        mags2['avgrmag'] = self._mov_avg_filt(winsize, mags2['rectrmag'])
-
-        laccth = self._calc_ind_threshold(
-                find_peaks(mags2.avglmag.values, height=height)[1])
-        raccth = self._calc_ind_threshold(
-                find_peaks(mags2.avgrmag.values, height=height)[1])
-
-        # used for both positive and negative borders
-        return([laccth, raccth])
+                - np.std(maxprop['peak_heights'])
 
     # This is equivalent to the MATLAB script
     def _get_ind_acc_threshold(self, accmags, reject = 3.2501, height = 1.0):
@@ -251,7 +203,7 @@ class opalv2:
         A function to find individual thresholds
 
         Parameters:
-            accmags: pd.DataFrame
+            accmags: dict
                 detrended acceleration norms (L/R)
             reject: float, optional
                 a cut-off; values below this number will be included
@@ -319,13 +271,15 @@ class opalv2:
                 lambda x: x - self._calc_datetime(sensorobj['Time'][0]), in_en_dts))
             convert = 1e6    # conversion constant: 1 second = 1e6 microseconds
             microlen = 0.05 * convert    # duration of a data point in microseconds
-            poten = np.ceil((d_in_micro[1].seconds*convert
-                           + d_in_micro[1].microseconds)/microlen)\
+            poten = np.ceil((d_in_micro[1].days*86400*convert +    # 86400 = 24*3600
+                d_in_micro[1].seconds*convert +
+                d_in_micro[1].microseconds)/microlen)\
                                    .astype('int')
             if poten < sensorobj['Time'].shape[0]:
                 indices = list(map(
                     lambda x: round(
-                        (x.seconds*convert + x.microseconds)/microlen),
+                        (x.days*86400*convert +
+                            x.seconds*convert + x.microseconds)/microlen),
                     d_in_micro))
             else:
                 indices = []
@@ -340,28 +294,6 @@ class opalv2:
             print("No recording start and end time provided. \
                     Analysis done on the entire recording")
         return row_idx
-
-    def get_ind_angvel_threshold(self, accmags, reject = 0.32, winsize = 0.5, height=0.01):
-        """ feature of Trujillo-Priego et al. (2017), needs development """
-        errmsg = "The rejection threshold for the gyroscope \
-                data should be a positive value"
-        assert (reject > 0), errmsg
-
-        mags2 = accmags.copy()
-        mags2['rectlmag'] = mags2.lmag.apply(lambda x: x if x > reject else 0)
-        mags2['rectrmag'] = mags2.rmag.apply(lambda x: x if x > reject else 0)
-
-        mags2['avglmag'] = self._mov_avg_filt(winsize, mags2['rectlmag'])
-        mags2['avgrmag'] = self._mov_avg_filt(winsize, mags2['rectrmag'])
-
-        self.avmag = mags2
-
-        self.lavth = self._calc_ind_threshold(
-                find_peaks(mags2.avglmag.values, height=height)[1])
-        self.ravth = self._calc_ind_threshold(
-                find_peaks(mags2.avgrmag.values, height=height)[1])
-
-        return([self.lavth, self.ravth])
 
     def _get_count(self):
         """
@@ -389,14 +321,13 @@ class opalv2:
         A function to get counts and tcounts
 
         Parameters:
-            acounts: pd.DataFrame
-                output of self._get_count(accmags, angvels)
+            None
 
         Returns:
             tcounts: dict
                 keys: count, tcount
         """
-        acounts = self._get_count()
+        acounts = self._get_count()    # accmags or angvels
 
         # Let's start with collecting all acc values that went over the threshold
         # The output of np.where would be a tuple - so take the first value
@@ -430,7 +361,7 @@ class opalv2:
                 over_th_arr: np.array
                     indices of data points over a threshold
                     (ex: over_posth_l)
-                acounts: pd.DataFrame
+                acounts: dict
                     output of self._get_count(accmags, angvels)
 
             Returns:
@@ -487,8 +418,8 @@ class opalv2:
         A function to get movement counts
 
         Parameters:
-            tcounts: pd.DataFrame
-                the output of self._get_tcounts(accmags)
+            side: str
+                'L'eft or 'R'ight
 
         Returns:
             tmov: list
@@ -501,7 +432,7 @@ class opalv2:
         # Each value is a list of TWO lists (counts, tcounts)
         tcounts = self._get_cntc()
 
-        # index | tcount | th_crossed
+        # index | count | tcount | th_crossed
         arr_a = np.column_stack((np.arange(len(tcounts[side][0])),
                                  tcounts[side][0],  # counts
                                  tcounts[side][1],  # tcounts
@@ -509,9 +440,21 @@ class opalv2:
         arr_b = arr_a[np.nonzero(arr_a[:,2])[0], :]
         movidx = np.zeros((arr_b.shape[0], 3), dtype=int)
 
+        # arr_b[0,] would be the row with the first nonzero tcount.
+        # Smith et al. (2015) has this quote:
+        #   "The start of a movement was defined as simultaneous accceleration
+        #    above a magnitude threshold and angular velocity greater than 0."
+        # So I originally thought that the start of a movement should be
+        #   a data point with tcount value 1 or -1
+        # However, a typicaly movement's acceleration profile would rather be
+        #   sinusoidal. Probably we could search backwards a little more and
+        #   define the "start of a movement" as the data point that precedes
+        #   a oint with the nonzero tcount (first_tc) in time and has the same
+        #   count value to that of first_tc.
         for i in range(arr_b.shape[0]-1):
             pairdiff = np.diff(arr_b[i:i+2,:], axis=0).ravel()
             # Two Tcounts are different (-1 vs. 1)
+            # Rolling back to the version: Dev 29, 2022
             if all((pairdiff[2] != 0, pairdiff[0] <= 8)):
                 sidx = arr_b[i+1, 0]     # second threshold crossing
                 if arr_b[i,3] == arr_b[i,2]:  # if th_cross == t_count
@@ -521,28 +464,51 @@ class opalv2:
                         first_tc = arr_b[i,0]-1
                     else:
                         first_tc = arr_b[i,0]-2
-                fstep = 8 - sidx + first_tc
+                fstep = 15 - sidx + first_tc # 8 -> 15 (Feb 9, 2023)
                 if all((0 < fstep < first_tc,
-                    arr_a[(first_tc-1),1] == arr_a[first_tc,1])):
-                    # diffcnt is the index of the point whose count value is_dst
+                    arr_a[(first_tc-1),3] == arr_a[first_tc,3])):
+                    # diffcnt is the index of the point whose count value is
                     # different from that of first_tc, implying that
                     # the baseline is 'crossed'. This should NOT happen.
                     # Therefore, find one point behind sidx and set that as
                     # the start of a movement
-                    diffcnt = np.where(arr_a[(first_tc-fstep):first_tc,1] !=
-                            arr_b[i,2])[0]
-                    if diffcnt.size:
-                        movstart = first_tc - fstep + diffcnt[-1] + 1
+                    # (1/3/22) Let's revise so that diffcnt would be
+                    # the index of the FIRST point whose cross_th value is
+                    # the same as that of first_tc and is within k data points
+                    # from the first_tc where k = max(3, fstep)
+                    # k = min(3, fstep)
+                    # (2/2/23) No. Use fstep, and run another while loop
+                    k = 0
+                    while (arr_a[(first_tc-k),3] == arr_a[first_tc,3]):
+                        k += 1
+                        if k > fstep:
+                            break
+                    movstart = first_tc - k + 1
+                    #diffcnt = np.where(arr_a[(first_tc-fstep):first_tc,1] !=
+                    #        arr_b[i,2])[0]
+                    #if diffcnt.size:
+                    #    movstart = first_tc - fstep + diffcnt[-1] + 1
                     # If you don't find a point whose count value is different,
                     # simply go back by the amount of step
-                    else:
-                        movstart = first_tc - fstep
+                    #else:
+                    #    movstart = first_tc - fstep
                 else:
                     movstart = first_tc
-                addi = int(sidx + 30 - pairdiff[0])  # a mov < 30 data points
+
+                addi = int(movstart + 30)  # a mov < 30 data points
                 try:
+                    # movend: the first point that has the "count" value
+                    # whose sign is the opposite to that of sidx's 
+                    # "tcount" value
                     movend = np.where(
                             arr_a[sidx:addi,1] == -arr_a[sidx,2])[0][0]
+                    # If you move by movend from sidx and that point crossed
+                    # a threshold (-1 or 1, nonzero),
+                    # check one point further, and see if that point also crossed
+                    # the same threshold. If not, the end of a movement
+                    # should be one back. Otherwise, take that as the movend.
+                    # The end of a movement should be one back
+                    # (2/2/23) What if you forget about it, and just take it?
                     movidx[i] = [movstart, sidx, sidx + movend]
                 except:
                     continue
@@ -567,7 +533,7 @@ class opalv2:
         #return list(map(mark_tmov, tcounts.values()))
         return movidx_nz2
 
-    def acc_per_mov(self, side='L'):
+    def acc_per_mov(self, side='L', movmat=None):
         """
         A function to calculate average acceleration per movement
             and the peak acceleration per movement
@@ -575,6 +541,8 @@ class opalv2:
         Parameters:
             side: str
                 'L' or 'R'
+            movmat: None | np.array
+                matrix that stores movements' indices
 
         Returns:
             acc_arr: numpy ndarray
@@ -582,7 +550,10 @@ class opalv2:
         """
         assert(side in ['L', 'R']), "side should be 'L' or 'R'"
 
-        movidx = self.get_mov(side)
+        if movmat is not None:
+            movidx = movmat
+        else:
+            movidx = self.get_mov(side)
 
         if side == 'L':
             accvec = np.abs(self.measures.accmags['lmag'].copy())
@@ -594,7 +565,7 @@ class opalv2:
 
         return acc_arr
 
-    def plot_segment(self, time_passed, duration=20, side='L'):
+    def plot_segment(self, time_passed, duration=20, side='L', movmat=None):
         """
         A function to let user visually check movement counts
 
@@ -613,246 +584,223 @@ class opalv2:
         """
         assert(side in ['L', 'R']), "side should be 'L' or 'R'"
 
-        movidx = self.get_mov(side)
+        if movmat is not None:
+            movidx = movmat
+        else:
+            movidx = self.get_mov(side)
+
         if side == 'L':
             labels = ['lmag', 'laccth', 'lnaccth']
         else:
             labels = ['rmag', 'raccth', 'rnaccth']
 
-        if self.info.rowidx is not None:
+        # Jan 31, 23 / WHY did I do this? (checking rowidx is None)
+        # Feb 09, 23 / I think this can be remove
+        #if self.info.rowidx is not None:
             #new_t = self.info.record_times[0]\
             #        + timedelta(seconds=time_passed)
             #end_t = self.info.record_times[1]
-            startidx = time_passed * 20
-            endidx = startidx + duration * 20 + 1
-            mov_st = np.where(movidx[:,0] >= startidx)[0]
-            mov_fi = np.where(movidx[:,2] <= endidx)[0]
+        startidx = time_passed * 20
+        endidx = startidx + duration * 20 + 1
+        mov_st = np.where(movidx[:,0] >= startidx)[0]
+        mov_fi = np.where(movidx[:,2] <= endidx)[0]
 
-            _, ax = plt.subplots(1)
-            accline, = ax.plot(self.measures.accmags[labels[0]][startidx:endidx],
-                    marker='o', c='pink', label='acceleration')
-            pthline = ax.axhline(y=self.measures.thresholds[labels[1]],
-                    c='k', linestyle='dotted', label='positive threshold')
-            nthline = ax.axhline(y=self.measures.thresholds[labels[2]],
-                    c='k', linestyle='dashed', label='negative threshold')
-            ax.axhline(y=0, c='r')  # baseline
-            velline, = ax.plot(self.measures.velmags[labels[0]][startidx:endidx],
-                    c='deepskyblue', linestyle='dashdot', label='angular velocity')
-            ax.legend(handles = [accline, pthline, nthline, velline])
+        _, ax = plt.subplots(1)
+        accline, = ax.plot(self.measures.accmags[labels[0]][startidx:endidx],
+                marker='o', c='pink', label='acceleration')
+        pthline = ax.axhline(y=self.measures.thresholds[labels[1]],
+                c='k', linestyle='dotted', label='positive threshold')
+        nthline = ax.axhline(y=self.measures.thresholds[labels[2]],
+                c='k', linestyle='dashed', label='negative threshold')
+        ax.axhline(y=0, c='r')  # baseline
+        velline, = ax.plot(self.measures.velmags[labels[0]][startidx:endidx],
+                c='deepskyblue', linestyle='dashdot', label='angular velocity')
+        ax.legend(handles = [accline, pthline, nthline, velline])
 
-            if mov_st.size:
-                if mov_st[0] == mov_fi[-1]:
-                    mov_lens = movidx[mov_st[0],2] - movidx[mov_st[0],0]
+        if mov_st.size:
+            if mov_st[0] == mov_fi[-1]:
+                mov_lens = movidx[mov_st[0],2] - movidx[mov_st[0],0]
+            else:
+                fi2 = mov_fi[-1] + 1
+                mov_lens = movidx[mov_st[0]:fi2,2] - movidx[mov_st[0]:fi2,0]
+            if mov_lens.size:
+                if mov_lens.size == 1:
+                    hull = np.arange(movidx[mov_st[0],0],
+                                     movidx[mov_st[0],0] + mov_lens + 1)
+                    hl, = ax.plot(hull - startidx,
+                            self.measures.accmags[labels[0]][hull],
+                            c='g', linewidth=2, label='movement')
+                    ax.legend(handles = [accline, pthline, nthline,
+                                         velline, hl])
                 else:
-                    fi2 = mov_fi[-1] + 1
-                    mov_lens = movidx[mov_st[0]:fi2,2] - movidx[mov_st[0]:fi2,0]
-                if mov_lens.size:
-                    if mov_lens.size == 1:
-                        hull = np.arange(movidx[mov_st[0],0],
-                                         movidx[mov_st[0],0] + mov_lens + 1)
-                        hl, = ax.plot(hull - startidx,
-                                self.measures.accmags[labels[0]][hull],
-                                c='g', linewidth=2, label='movement')
-                        ax.legend(handles = [accline, pthline, nthline,
-                                             velline, hl])
-                    else:
-                        hull = [np.arange(x, (x+mov_lens[i]+1))\
-                                for i, x in enumerate(movidx[mov_st[0]:fi2,0])]
-                        hl, = ax.plot(hull[0] - startidx,
-                                self.measures.accmags[labels[0]][hull[0]],
-                                c='g', linewidth=2, label='movement')
-                        ax.legend(handles = [accline, pthline, nthline,
-                                             velline, hl])
-                        for j in range(1, len(hull)):
-                            ax.plot(hull[j]-startidx,
-                                    self.measures.accmags[labels[0]][hull[j]],
-                                    c='g', linewidth=2)
-            title = f"{duration}s from "\
-                    f"{(self.info.record_times[0] + timedelta(seconds=time_passed)).ctime()}"\
-                    f" UTC\n(recording ended at {self.info.record_times[1].ctime()} UTC)"
-            ax.set_title(title)
-            ax.set_xlabel("Time since onset (sec)")
-            ax.set_ylabel("Acc. magnitude (m/s^2)")
-            xticks = np.arange(0, (duration+1)*20, 400)
-            xlabs = [str(x) for x in np.arange(0, (duration+1), 20)]
-            ax.set_xticks(ticks=xticks, labels=xlabs)
+                    hull = [np.arange(x, (x+mov_lens[i]+1))\
+                            for i, x in enumerate(movidx[mov_st[0]:fi2,0])]
+                    hl, = ax.plot(hull[0] - startidx,
+                            self.measures.accmags[labels[0]][hull[0]],
+                            c='g', linewidth=2, label='movement')
+                    ax.legend(handles = [accline, pthline, nthline,
+                                         velline, hl])
+                    for j in range(1, len(hull)):
+                        ax.plot(hull[j]-startidx,
+                                self.measures.accmags[labels[0]][hull[j]],
+                                c='g', linewidth=2)
+        title = f"{duration}s from "\
+                f"{(self.info.record_times[0] + timedelta(seconds=time_passed)).ctime()}"\
+                f" UTC\n(recording ended at {self.info.record_times[1].ctime()} UTC)"
+        ax.set_title(title)
+        ax.set_xlabel("Time since onset (sec)")
+        ax.set_ylabel("Acc. magnitude (m/s^2)")
+        xticks = np.arange(0, (duration+1)*20, 400)
+        xlabs = [str(x) for x in np.arange(0, (duration+1), 20)]
+        ax.set_xticks(ticks=xticks, labels=xlabs)
 
-            plt.show()
+        plt.show()
 
-        else:
-            raise Exception("Please check your REDCap export. No time_donned was provided")
-
-
-    def _raw_mov_kinematics(self, accmags, acounts):
+    def time_asleep(self, lmovmat, rmovmat):
         """
-        A function to return kinematic variables
+        A function to approximate the time the infant was inactive
 
         Parameters:
-            accmags: pd.DataFrame
-            acounts: pd.DataFrame
+            lmovmat: np.array
+                indices of left movements
+            rmovmat: np.array
+                indices of right movements
 
-        Return:
-            kinematics: dict
+        Returns:
+            a list of estimated inactive times for left and right
+            (unit: data point)
         """
-        lcombined = pd.merge(accmags.lmag,
-                             acounts['lcount'],
-                             right_index = True,
-                             left_index = True)
-        rcombined = pd.merge(accmags.rmag,
-                             acounts['rcount'],
-                             right_index = True,
-                             left_index = True)
+        # time_asleep calculated based on the original MATLAB code...
+        # If 6000 consequent data points (5 min) show:
+        #   1) angular velocity less than 0.3
+        #   2) acceleration norm less than 1.001
+        # then this period is considered as the baby sleeping or inactive.
+        # Technically, this is a bit weird... because you would 'ignore'
+        # movements with negative peaks. The second condition should be applied
+        # to the absolute values of the detrended acc magnitudes.
 
-        lcombined.rename(columns = {'lmag':'accmag', 'lcount':'counts'},
-                         inplace=True)
-        rcombined.rename(columns = {'rmag':'accmag', 'rcount':'counts'},
-                         inplace=True)
+        # For Axivity sensor recording, there are just too many data points.
+        # This approach would not work.
 
-        def start_to_end(tmov_series, th_arr, mags_n_cnts):
-            """
-            This function will provide six pieces of
-            movement related information
+        # Another method to calculate [time asleep] is introduced in
+        # Trujillo-Priego et al. (2017) - less than 3 movements in 5 min.
+        # An approximation of this method could be:
+        #
+        #   a'  a  1   bc 2           d   3           4
+        #   -----[-+-]--[-+--]---------[--+-]------[--+-]-
+        #
+        # Let's suppose that 1,2,3,4 are the movement counts (+).
+        # Their starts and ends are marked by [ and ].
+        # First, you define an anchor and a target.
+        # The anchor and the target are the indices of movements separated by
+        # no more than two movements.
+        # From the image above, the first anchor is 1 and the first target is 2.
+        # You then calculate the distance (D):
+        #   one point before the start of a target (b) - start of an anchor (a)
+        # If the anchor is 1, then instead of a, use a'.
 
-            Parameters:
-                tmov_series: pd.Series
-                    output of _get_mov()
-                th_arr: list
-                    If a accmag value of a datapoint crossed
-                    its corresponding threshold, the value is 1
-                    Otherwise, 0.
-                    ex) self.tderivs.th_crossed['L'].copy()
-                mags_n_cnts: pd.DataFrame
-                    a data frame that has accmag and counts values
+        # i. If D > 6000, you increase [time asleep] by D
+        #    Then the new anchor will be the previous target (2), and the new
+        #    target will be target + 1 (3).
+        #    D is newly defined: d-c (refer to the image above)
+        #
+        # ii. If FALSE, increase the target by 1 and check if the new distance
+        #     b' - a' is greater than 6000 (refer to the imave below).
+        #     If that's TRUE, do i. and move on.
+        #     If that's FALSE, increase the target one more time do the same.
+        #     (D = b'' - a'; D > 6000?)
+        #
+        #   a'  a  1   b  2           b'  3       b'' 4
+        #   -----[-+-]--[-+--]---------[--+-]------[--+-]-
+        #
+        #     If you still see that D = b'' - a' < 6000, increase the anchor
+        #     by 1, and repeat ii.
+        #     If D > 6000, do i and move on.
 
-            Returns:
-                kinematics: dict
-                    a dict of pieces of movement related information
-                    - index: second crossing of accmag threshold
-                    - how long was a movement
-                    - where was the start of a movement
-                    - where was the end of a movement
-                    - what was the average acceleration per movement
-                    - what was the peak acceleration per movement
-            """
-            tmovidx = np.nonzero(tmov_series.values)[0]
-            movinfo = np.zeros((len(tmovidx), 5))   # colnames follow
-            colnames = ['MovIdx',
-                        'MovLength',
-                        'MovStart',
-                        'MovEnd',
-                        'avepMov',
-                        'peakpMov']
+        def calc_inact(movmat, N):
+            """ N is the length of the recording """
+            anchor = 0
+            target = 1
+            t0 = 0
+            time_asleep = 0
+            mvcnt = movmat.shape[0]
+            len_5_min = 6000 # 5 * 60 * 20
 
-            # j is the index of Tmov's.
-            # At any j, count will be -1 or 1 and not 0.
-            for i, j in enumerate(tmovidx):
-                k = -1              # Moving backward...
-                while True:
-                    # ... to find the data point that crossed the threshold value
-                    #   whose sign is opposite to the count at j. This means that
-                    #   the baseline (accmag = 0) is crossed once.
-                    if np.sign(th_arr[j+k]) ==\
-                            -np.sign(mags_n_cnts['counts'][j]):
-                        movsidx = int(j+k)  # "MOV"ement "S"tart "INDEX"
+            while target < (mvcnt-1):
+                if target-anchor > 3:
+                    anchor += 1
+                    t0 = movmat[anchor][0]
+
+                t1 = movmat[target][0]-1
+
+                if t1-t0 > len_5_min:
+                    time_sleep += t1-t0
+                    anchor = target
+                    t0 = movmat[anchor][0]
+                    target += 1
+                else:
+                    target += 1
+            # When you break out from the loop, make t0 the end of the last move
+            t0 = movmat[-1][2] + 1
+            t1 = N-1
+            if t1-t0 > len_5_min:
+                time_sleep += t1-t0
+
+            return time_sleep
+
+        return list(map(calc_inact, [lmovmat, rmovmat],\
+                [self.info.recordlen['L'], self.info.recordlen['R']]))
+
+def cycle_filt(movmat, threshold=4):
+    """
+    A function to detect and filter out movements look highly cyclical
+
+    Parameters:
+        movmat: np.array
+            an array of movement indices
+        threshold: int
+            difference between the end of one movement and the start of
+            the next movement; default is 4
+
+    Returns:
+        movmat_del: np.array
+            an array of movement indices / cyclical movements rejected
+    """
+    to_del = []
+    i=0
+    while i < (movmat.shape[0]-2):
+        diff = movmat[i+1,0] - movmat[i,2]
+        if diff <= threshold:
+            j=i+1   # j could be the last mov idx
+            while j < (movmat.shape[0]-1):
+                if (movmat[j+1,0]-movmat[j,2]) <= threshold:
+                    j+=1
+                else:
+                    break
+            # If more than 8 'cycles' are observed, discard the movements
+            # (should it be ten or more?)
+            # Discussion with Dr. Smith (2/13/23) -> increasing the number
+            # testing - doubling the number to 16? -> 40
+            if j-1 > 39:
+                to_del.extend(range(i, j+1))
+                # further remove 2 movements within 12 seconds of j'th movement
+                # Why two? just...
+                k=j+1
+                counter = 0
+                while all((k < (movmat.shape[0]-1), counter < 3)):
+                    if (movmat[k,0]-movmat[j,2]) < 240:
+                        to_del.append(k)
+                        counter+=1
+                        k+=1
+                    else:
                         break
-                    k -= 1      # Keep going backwards if a previous attempt failed
-                idx2 = 1               # Moving forward...
-                while True:
-                    # ... to find the data point that either touches
-                    # or crosses the baseline one more time.
-                    # This time the sign of the data point at the
-                    # index [j+l] could be 0 or opposite to that of
-                    # the datapoint at the index [j]
-                    if np.sign(mags_n_cnts['counts'][j+idx2]) !=\
-                            np.sign(mags_n_cnts['counts'][idx2]):
-                        moveidx = int(j+idx2)  # "MOV"ement "E"nd "INDEX"
-                        break
-                    idx2 += 1
-                movinfo[i, :] = [moveidx - movsidx + 1,
-                                 movsidx,
-                                 moveidx,
-                                 np.mean(
-                                     abs(mags_n_cnts.accmag[movsidx:(moveidx+1)])),
-                                 max(abs(mags_n_cnts.accmag[movsidx:(moveidx+1)]))]
-            return(dict(zip(colnames, [tmovidx,
-                                       movinfo[:,0],
-                                       movinfo[:,1],
-                                       movinfo[:,2],
-                                       movinfo[:,3],
-                                       movinfo[:,4]])))
-
-        kinematics_l = start_to_end(self.Tmov.L,
-                                    self.tderivs.th_crossed['L'].copy(),
-                                    lcombined.copy())
-        kinematics_r = start_to_end(self.Tmov.R,
-                                    self.tderivs.th_crossed['R'].copy(),
-                                    rcombined.copy())
-        # Lkinematics and Rkinematics could differ in length
-        #   so better return a dictionary.
-        kinematics  = {'Lkinematics':kinematics_l, 'Rkinematics':kinematics_r}
-
-        return kinematics
-
-    def mark_simultaneous(self):
-        """
-        We need to re-evaluate how we operationalize simultaneity of bouts.
-        Let's suppose that at the index j, Tmov.L[j] = 1
-        If the following three conditions are all true for another index k:
-          1) Tmov.R[k] = 1              (right leg bout)
-          2) RestMov[(k-n):(k+m+1)] = 1 (duration of that bout)
-          3) k-n =< j <= k+m            (left leg bout located inside
-                                         the duration of the right leg bout)
-        we can argue that the bout of the left leg at the index j occurred
-        in the vicinity of the bout of the right leg at the index k.
-        Consequently, we could label these movements as "simultaneous".
-        Simultaneous will be further specified to two cases.
-            1) Bilateral Synchronous: starting points of RestMov and LestMov are exactly the same
-            2) Bilateral Asynchronous: starting points don't match, but they overlap
-        """
-        r_dict = self.kinematics['Rkinematics'].copy()
-        l_dict = self.kinematics['Lkinematics'].copy()
-
-        # sole_r and sole_l will each show the indices of nonzero RTmov and LTmov elements
-        # In other words, locations of bouts
-        sole_r = pd.DataFrame(data = {'MovIdx':r_dict['MovIdx'],
-                                      'Start':r_dict['MovStart'],
-                                      'End': r_dict['MovEnd']})
-        sole_l = pd.DataFrame(data = {'MovIdx':l_dict['MovIdx'],
-                                      'Start':l_dict['MovStart'],
-                                      'End': l_dict['MovEnd']})
-
-        # If RStart is equal to Lstart, the corresponding RMovIdx is
-        # bilateral synchronous to the LMovIdx associated with the LStart
-        # If RStart is not equal, but RMovIdx is in between LMovStart and LMovEnd,
-        # then it's bilateral asynchronous
-
-        def match_idx(sole_1, sole_2, refside = 'R'):
-            bilat_syncidx = {}
-            bilat_asyncidx = {}
-            bilat_total = {}
-            if refside == 'L':
-                keys = ['LStart', 'RStart']
+                i=k
             else:
-                keys = ['RStart', 'LStart']
-            for i, mov in enumerate(sole_1.MovIdx):
-                for j in range(sole_2.shape[0]):
-                    if sole_2.Start[j] < mov < sole_2.End[j]:
-                        bilat_total[mov] = i
-                        if sole_1.Start[i] == sole_2.Start[j]:
-                            # You're storing the row indices of LStart and RStart
-                            # This is for the ease of later processing of sole_r and sole_l
-                            bilat_syncidx[mov] = dict(zip(keys, [i,j]))
-                        else:
-                            bilat_asyncidx[mov] = dict(zip(keys, [i,j]))
-                        break
-            return({'Sync':bilat_syncidx, 'Async':bilat_asyncidx, 'Total':bilat_total})
-
-        # still takes quite a long time...need to make it more efficient
-        bilat_r = match_idx(sole_r, sole_l)
-        bilat_l = match_idx(sole_l, sole_r, 'L')
-
-        # Return information about simultaneous moves
-        return({'RSim':bilat_r, 'LSim':bilat_l})
+                i=j+1
+        else:
+            i+=1
+    movmat_del = np.delete(movmat, to_del, 0)
+    return movmat_del
 
 def make_start_end_datetime(redcap_csv, filename, site):
     """
@@ -899,19 +847,31 @@ def make_start_end_datetime(redcap_csv, filename, site):
 
         return result
 
+    def convert_to_utc(datetime_obj, site):
+        local = pytz.timezone(site)
+        local_dt = local.localize(datetime_obj, is_dst = None)
+        utc_dt = local_dt.astimezone(pytz.utc)
+        return utc_dt
+
     idx = redcap_csv.filename.apply(lambda x: match_any(x, filename))
 
     don_n_doff = redcap_csv.loc[np.where(idx)[0][0], ['don_t', 'doff_t']]
     #don_n_doff = times.values[0]  # times is a Pandas Series
 
-    temp = path_removed.split('-')[0]
-    don_h, _ = don_n_doff[0].split(":")
-    doff_h, _ = don_n_doff[1].split(":")
+    # 2/10/23, don_n_doff could be NaN, meaning that people forgot to
+    # enter times to the REDCap. NaN is "float".
+    # If that's the case, return None
+    if isinstance(don_n_doff[0], float):
+        utc_don_doff = None
+    else:
+        temp = path_removed.split('-')[0]
+        don_h, _ = don_n_doff[0].split(":")
+        doff_h, _ = don_n_doff[1].split(":")
 
-    don_dt = datetime.strptime('-'.join([temp, don_n_doff[0]]),
-                                 '%Y%m%d-%H:%M') + timedelta(minutes=1)
-    doff_temp = datetime.strptime('-'.join([temp, don_n_doff[1]]),
-                                    '%Y%m%d-%H:%M')
+        don_dt = datetime.strptime('-'.join([temp, don_n_doff[0]]),
+                                     '%Y%m%d-%H:%M') + timedelta(minutes=1)
+        doff_temp = datetime.strptime('-'.join([temp, don_n_doff[1]]),
+                                        '%Y%m%d-%H:%M')
     # There are cases where the REDCap values are spurious at best.
     # Sometimes the first time point recorded in sensors could be later
     #   than what's listed as the time_donned in the REDCap file by
@@ -927,16 +887,13 @@ def make_start_end_datetime(redcap_csv, filename, site):
     # Let's hope for the best that everyone removed the sensors
     #   before 2 PM the next day.
 
-    if int(doff_h) < 14 & (abs(int(don_h) - int(doff_h)) < 10):
+    nextday = any((all((int(doff_h) < 14, 
+        abs(int(don_h) - int(doff_h)) < 10)), int(doff_h) < 12))
+
+    if nextday:
         doff_dt = doff_temp + timedelta(days=1)
     else:
         doff_dt = doff_temp
-
-    def convert_to_utc(datetime_obj, site):
-        local = pytz.timezone(site)
-        local_dt = local.localize(datetime_obj, is_dst = None)
-        utc_dt = local_dt.astimezone(pytz.utc)
-        return utc_dt
 
     # site-specific don/doff times are converted to UTC time
     utc_don_doff = list(map(lambda lst: convert_to_utc(lst, site), [don_dt, doff_dt]))
