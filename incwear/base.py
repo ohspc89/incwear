@@ -790,7 +790,7 @@ def cycle_filt(movmat, threshold=4):
             # (should it be ten or more?)
             # Discussion with Dr. Smith (2/13/23) -> increasing the number
             # testing - doubling the number to 16? -> 40
-            if j-1 > 39:
+            if j-i > 39:
                 to_del.extend(range(i, j+1))
                 # further remove 2 movements within 12 seconds of j'th movement
                 # Why two? just...
