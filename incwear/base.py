@@ -178,7 +178,16 @@ class BaseProcess:
         if det_option == 'median':
             out = map(lambda x: x - np.median(x), [lmag, rmag])
         else:
-            out = map(detrend, [lmag, rmag])
+            # detrend every 1000 seconds (20000 data points)
+            # Now you have to convert the map objects to lists
+            lmaglist, rmaglist = list(lmag), list(rmag)
+            tempx, tempy = [], []
+            binsize = np.ceil(len(lmaglist)/20000)
+            for i in range(int(binsize)):
+                tempx.extend(detrend(lmaglist[(20000*i):20000*(i+1)]))
+                tempy.extend(detrend(rmaglist[(20000*i):20000*(i+1)]))
+
+            out = [np.array(tempx), np.array(tempy)]
 
         return dict(zip(['lmag', 'rmag'], out))
 

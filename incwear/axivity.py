@@ -6,7 +6,7 @@ from scipy.interpolate import interp1d
 from base import BaseProcess, cycle_filt
 
 class Ax6(BaseProcess):
-    def __init__(self, Lfilename, Rfilename):
+    def __init__(self, Lfilename, Rfilename, det_option='median'):
         super().__init__(Lfilename=Lfilename, Rfilename=Rfilename)
         reader = ReadCwa()
         l_skdh = reader.predict(Lfilename)
@@ -29,7 +29,8 @@ class Ax6(BaseProcess):
         rowidx = None
         accmags = self._get_mag(
                 {'L': intp(nt_l), 'R': intp_r(nt_r)},
-                rowidx)
+                rowidx,
+                det_option=det_option)
         velmags = self._get_mag(
                 {'L': intpv(nt_l), 'R': intpv_r(nt_r)},
                 rowidx)
