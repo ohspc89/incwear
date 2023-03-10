@@ -731,7 +731,7 @@ class BaseProcess:
             anchor = 0
             target = 1
             t0 = 0
-            time_asleep = 0
+            time_sleep = 0
             mvcnt = movmat.shape[0]
             len_5_min = 6000 # 5 * 60 * 20
 
