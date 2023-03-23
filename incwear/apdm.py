@@ -1,7 +1,7 @@
 from datetime import datetime, timezone, timedelta
 import numpy as np
 import h5py
-from base import BaseProcess, make_start_end_datetime, cycle_filt
+from base import BaseProcess, make_start_end_datetime, cycle_filt, time_asleep
 
 class SensorMissingError(Exception):
     """ If a sensor recording is missing, raise an error """

@@ -665,100 +665,103 @@ class BaseProcess:
 
         plt.show()
 
-    def time_asleep(self, lmovmat, rmovmat):
-        """
-        A function to approximate the time the infant was inactive
+def time_asleep(self, movmat, recordlen, t0=0, t1_user=None):
+    """
+    A function to approximate the time the infant was inactive
 
-        Parameters:
-            lmovmat: np.array
-                indices of left movements
-            rmovmat: np.array
-                indices of right movements
+    Parameters:
+        movmat: np.array
+            indices of movements
+        recordlen: int
+            length of the recording
+            ex) info.recordlen['R'] of a class object
+        t0: int
+            initial time, default is 0
+        t1_user: int|None
+            user defined end time, default is None
 
-        Returns:
-            a list of estimated inactive times for left and right
+    Returns:
+        time_sleep: int
+            estimated inactive times for left and right
             (unit: data point)
-        """
-        # time_asleep calculated based on the original MATLAB code...
-        # If 6000 consequent data points (5 min) show:
-        #   1) angular velocity less than 0.3
-        #   2) acceleration norm less than 1.001
-        # then this period is considered as the baby sleeping or inactive.
-        # Technically, this is a bit weird... because you would 'ignore'
-        # movements with negative peaks. The second condition should be applied
-        # to the absolute values of the detrended acc magnitudes.
+    """
+    # time_asleep calculated based on the original MATLAB code...
+    # If 6000 consequent data points (5 min) show:
+    #   1) angular velocity less than 0.3
+    #   2) acceleration norm less than 1.001
+    # then this period is considered as the baby sleeping or inactive.
+    # Technically, this is a bit weird... because you would 'ignore'
+    # movements with negative peaks. The second condition should be applied
+    # to the absolute values of the detrended acc magnitudes.
 
-        # For Axivity sensor recording, there are just too many data points.
-        # This approach would not work.
+    # For Axivity sensor recording, there are just too many data points.
+    # This approach would not work.
 
-        # Another method to calculate [time asleep] is introduced in
-        # Trujillo-Priego et al. (2017) - less than 3 movements in 5 min.
-        # An approximation of this method could be:
-        #
-        #   a'  a  1   bc 2           d   3           4
-        #   -----[-+-]--[-+--]---------[--+-]------[--+-]-
-        #
-        # Let's suppose that 1,2,3,4 are the movement counts (+).
-        # Their starts and ends are marked by [ and ].
-        # First, you define an anchor and a target.
-        # The anchor and the target are the indices of movements separated by
-        # no more than two movements.
-        # From the image above, the first anchor is 1 and the first target is 2.
-        # You then calculate the distance (D):
-        #   one point before the start of a target (b) - start of an anchor (a)
-        # If the anchor is 1, then instead of a, use a'.
+    # Another method to calculate [time asleep] is introduced in
+    # Trujillo-Priego et al. (2017) - less than 3 movements in 5 min.
+    # An approximation of this method could be:
+    #
+    #   a'  a  1   bc 2           d   3           4
+    #   -----[-+-]--[-+--]---------[--+-]------[--+-]-
+    #
+    # Let's suppose that 1,2,3,4 are the movement counts (+).
+    # Their starts and ends are marked by [ and ].
+    # First, you define an anchor and a target.
+    # The anchor and the target are the indices of movements separated by
+    # no more than two movements.
+    # From the image above, the first anchor is 1 and the first target is 2.
+    # You then calculate the distance (D):
+    #   one point before the start of a target (b) - start of an anchor (a)
+    # If the anchor is 1, then instead of a, use a'.
 
-        # i. If D > 6000, you increase [time asleep] by D
-        #    Then the new anchor will be the previous target (2), and the new
-        #    target will be target + 1 (3).
-        #    D is newly defined: d-c (refer to the image above)
-        #
-        # ii. If FALSE, increase the target by 1 and check if the new distance
-        #     b' - a' is greater than 6000 (refer to the imave below).
-        #     If that's TRUE, do i. and move on.
-        #     If that's FALSE, increase the target one more time do the same.
-        #     (D = b'' - a'; D > 6000?)
-        #
-        #   a'  a  1   b  2           b'  3       b'' 4
-        #   -----[-+-]--[-+--]---------[--+-]------[--+-]-
-        #
-        #     If you still see that D = b'' - a' < 6000, increase the anchor
-        #     by 1, and repeat ii.
-        #     If D > 6000, do i and move on.
+    # i. If D > 6000, you increase [time asleep] by D
+    #    Then the new anchor will be the previous target (2), and the new
+    #    target will be target + 1 (3).
+    #    D is newly defined: d-c (refer to the image above)
+    #
+    # ii. If FALSE, increase the target by 1 and check if the new distance
+    #     b' - a' is greater than 6000 (refer to the imave below).
+    #     If that's TRUE, do i. and move on.
+    #     If that's FALSE, increase the target one more time do the same.
+    #     (D = b'' - a'; D > 6000?)
+    #
+    #   a'  a  1   b  2           b'  3       b'' 4
+    #   -----[-+-]--[-+--]---------[--+-]------[--+-]-
+    #
+    #     If you still see that D = b'' - a' < 6000, increase the anchor
+    #     by 1, and repeat ii.
+    #     If D > 6000, do i and move on.
 
-        def calc_inact(movmat, N):
-            """ N is the length of the recording """
-            anchor = 0
-            target = 1
-            t0 = 0
-            time_sleep = 0
-            mvcnt = movmat.shape[0]
-            len_5_min = 6000 # 5 * 60 * 20
+    anchor = 0
+    target = 1
+    time_sleep = 0
+    mvcnt = movmat.shape[0]
+    len_5_min = 6000 # 5 * 60 * 20
 
-            while target < (mvcnt-1):
-                if target-anchor > 3:
-                    anchor += 1
-                    t0 = movmat[anchor][0]
+    while target < (mvcnt-1):
+        if target-anchor > 3:
+            anchor += 1
+            t0 = movmat[anchor][0]
 
-                t1 = movmat[target][0]-1
+        t1 = movmat[target][0]-1
 
-                if t1-t0 > len_5_min:
-                    time_sleep += t1-t0
-                    anchor = target
-                    t0 = movmat[anchor][0]
-                    target += 1
-                else:
-                    target += 1
-            # When you break out from the loop, make t0 the end of the last move
-            t0 = movmat[-1][2] + 1
-            t1 = N-1
-            if t1-t0 > len_5_min:
-                time_sleep += t1-t0
+        if t1-t0 > len_5_min:
+            time_sleep += t1-t0
+            anchor = target
+            t0 = movmat[anchor][0]
+            target += 1
+        else:
+            target += 1
+    # When you break out from the loop, make t0 the end of the last move
+    t0 = movmat[-1][2] + 1
+    if t1_user is not None:
+        t1 = t1_user-1
+    else:
+        t1 = recordlen-1
+    if t1-t0 > len_5_min:
+        time_sleep += t1-t0
 
-            return time_sleep
-
-        return list(map(calc_inact, [lmovmat, rmovmat],\
-                [self.info.recordlen['L'], self.info.recordlen['R']]))
+    return time_sleep
 
 def cycle_filt(movmat, threshold=4):
     """

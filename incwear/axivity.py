@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from skdh.io import ReadCwa
 from scipy.interpolate import interp1d
-from base import BaseProcess, cycle_filt
+from base import BaseProcess, cycle_filt, time_asleep
 
 class Ax6(BaseProcess):
     def __init__(self, Lfilename, Rfilename, det_option='median'):
