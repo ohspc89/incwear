@@ -665,7 +665,7 @@ class BaseProcess:
 
         plt.show()
 
-def time_asleep(self, movmat, recordlen, t0=0, t1_user=None):
+def time_asleep(movmat, recordlen, t0=0, t1_user=None):
     """
     A function to approximate the time the infant was inactive
 
