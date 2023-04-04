@@ -76,3 +76,95 @@ class OpalV2(BaseProcess):
             self.measures.velmags = velmags
             self.measures.thresholds = thresholds
             self.measures.__potst_init__() # update files
+
+class OpalV1(BaseProcess):
+    """
+    A class that will store (preliminarily) processed data
+        recorded in a pair of Opal V1 sensors
+    """
+    def __init__(self, filename, in_en_dts):
+        super().__init__(filename = filename,
+                in_en_dts = in_en_dts)
+
+        with h5py.File(filename, 'r') as sensors:
+            # Opal V1 does not have 'R' or 'L' label...
+            # Sensors have two members
+            # Each subgroup has a nmae with the format: XI-XXXXXX
+            sids = list(sensors.keys())[1:3]
+            if len(sids) == 1:
+                raise SensorMissingError("Only one sensor recording exists")
+            elif len(sids) == 0:
+                raise SensorMissingError("No sensor recording exists")
+
+            # This should be checked (4/3/23)
+            sensordict = {'L': sensors[sids[0]],
+                    'R': sensors[sids[1]]}
+            rowidx = self._prep_row_idx(sensordict['L'], in_en_dts)
+
+            accmags = self._get_mag(
+                    {x:sensordict[x]['Calibrated']['Accelerometers'] for x in ['L', 'R']}, rowidx)
+            velmags = self._get_mag(
+                    {x:sensordict[x]['Calibrated']['Gyroscopes'] for x in ['L', 'R']}, rowidx)
+
+            thresholds = self._get_ind_acc_threshold(accmags)
+
+            if rowidx is not None:
+                rts = [self._calc_datetime(sensors[sids[1]]['Time'][0])+\
+                        timedelta(seconds=rowidx[0]*0.05), in_en_dts[1]]
+            else:
+                rts = list(map(self._calc_datetime,
+                    [sensors[sids[1]]['Time'][0],
+                        sensors[sids[1]]['Time'][-1]]))
+
+            self.info.fname = [filename]
+            self.info.record_times = {'L': rts, 'R': rts}
+            self.info.label_r = 'N/A'
+            self.info.rowidx = rowidx
+            self.info.recordlen = {'L': accmags['lmag'].shape[0],
+                    'R': accmags['rmag'].shape[0]}
+            self.measures.accmags = accmags
+            self.measures.velmags = velmags
+            self.measures.thresholds = thresholds
+            self.measures.__post__init__()
+
+class OpalV2Single(BaseProcess):
+    """ Single Opal V2 Sensor """
+    def __init__(self, filename, in_en_dts):
+        super().__init__(filename = filename,
+                in_en_dts = in_en_dts)
+
+        with h5py.File(filename, 'r') as h5file:
+            sensors = h5file['Sensors']
+            sids = list(sensors.keys())[0]
+
+            sensordict = {'L': sensors[sids],
+                    'R': sensors[sids]}
+            rowidx = self._prep_row_idx(sensordict['L'], in_en_dts)
+
+            accmags = self._get_mag(
+                    {x:sensordict[x]['Accelerometer'] for x in ['L', 'R']},
+                    rowidx)
+            velmags = self._get_mag(
+                    {x:sensordict[x]['Gyroscope'] for x in ['L', 'R']},
+                    rowidx)
+            thresholds = self._get_ind_acc_threshold(accmags)
+
+            if rowidx is not None:
+                rts = [self._calc_datetime(sensors[sids]['Time'][0])+\
+                        timedelta(seconds=rowidx[0]*0.05), in_en_dts[1]]
+            else:
+                rts = list(map(self._calc_datetime,
+                    [sensors[sids]['Time'][0],
+                        sensors[sids['Time'][-1]]]))
+
+            self.info.fname = [filename]
+            self.info.record_times = {'L': rts, 'R': rts}
+            self.info.label_r = 'N/A'
+            self.info.rowidx = rowidx
+            self.info.recordlen = {'L': accmags['lmag'].shape[0],
+                    'R': accmags['rmag'].shape[0]}
+            self.measures.accmags = accmags
+            self.measures.velmags = velmags
+            self.measures.thresholds = thresholds
+            self.measures.__post_init__()
+
