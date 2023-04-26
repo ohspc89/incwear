@@ -32,7 +32,6 @@ import re
 from datetime import datetime, timedelta, timezone
 from itertools import chain
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.signal import find_peaks, detrend
 import pytz
@@ -626,7 +625,7 @@ class BaseProcess:
                 c='deepskyblue', linestyle='dashdot', label='angular velocity')
         ax.legend(handles = [accline, pthline, nthline, velline])
 
-        if mov_st.size:
+        if all((mov_st.size, mov_fi.size)):
             if mov_st[0] == mov_fi[-1]:
                 mov_lens = movidx[mov_st[0],2] - movidx[mov_st[0],0]
             else:
@@ -664,6 +663,20 @@ class BaseProcess:
         ax.set_xticks(ticks=xticks, labels=xlabs)
 
         plt.show()
+
+def get_axis_offsets(ground_gs):
+    """
+    A function to calculate axis/orientation specific biases
+
+    Parameters:
+        grounds_gs: list
+            measured gravitational accelerations in the following order/
+            x-, x+, y-, y+, z-, z+
+
+    Returns:
+        list of axis/orientation specific offsets
+    """
+    return list(map(lambda x: np.array([-1,1,-1,1,-1,1]) - x, ground_gs))
 
 def time_asleep(movmat, recordlen, t0=0, t1_user=None):
     """
@@ -910,3 +923,4 @@ def make_start_end_datetime(redcap_csv, filename, site):
     # site-specific don/doff times are converted to UTC time
     utc_don_doff = list(map(lambda lst: convert_to_utc(lst, site), [don_dt, doff_dt]))
     return utc_don_doff
+
