@@ -10,7 +10,7 @@ class Ax6(BaseProcess):
     This is a class that contains preprocessed info of cwa files.
     """
     def __init__(self, Lfilename, Rfilename, ground_gs, det_option='median',
-            intp_option='cubic'):
+            intp_option='cubic', fs=25):
         """
             Parameters:
                 ground_gs: list
@@ -71,9 +71,9 @@ class Ax6(BaseProcess):
             intpv_r = interp1d(r_skdh['time'], r_skdh['gyro'], axis=0)
 
         nt_l = np.round(
-                np.arange(l_skdh['time'][0], l_skdh['time'][-1], 1/20), 2)
+                np.arange(l_skdh['time'][0], l_skdh['time'][-1], 1/fs), 2)
         nt_r = np.round(
-                np.arange(r_skdh['time'][0], r_skdh['time'][-1], 1/20), 2)
+                np.arange(r_skdh['time'][0], r_skdh['time'][-1], 1/fs), 2)
         # This is a feature originally prepared for OPAL sensor processing
         # For Axivity sensor, you use the entire recording, so rowidx = None
         rowidx = None
@@ -102,3 +102,41 @@ class Ax6(BaseProcess):
         self.measures.velmags = velmags
         self.measures.thresholds = thresholds
         self.measures.__post_init__() # update fields
+
+class Ax6Calib(BaseProcess):
+    """
+    This is a class that takes calibration cwa files and stores
+    offset values.
+    """
+    def __init__(self, Lfilename, Rfilename):
+        super().__init__(Lfilename=Lfilename, Rfilename=Rfilename)
+        reader = ReadCwa()
+        l_skdh = reader.predict(Lfilename)
+        r_skdh = reader.predict(Rfilename)
+
+        # determine x, y, z axis
+        lgs = np.apply_along_axis(sorted, 0, arr=l_skdh['accel'])
+        rgs = np.apply_along_axis(sorted, 0, arr=r_skdh['accel'])
+
+        # left side, measured g's
+        # Each orientation is measured for 10 seconds: 250 data points in total
+        # We get the average of middle 100 ~ 150 points to estimate
+        # axis/orientation specific g measurement.
+        # The points should have standard deviation less than 0.01
+        # (this is already too high)
+        def get_gs(arr, ia, ib):
+            """ A function to estimate the measured 1g along each axis """
+            while True:
+                if any(arr[ia:ib,].std(axis=0) > 0.01):
+                    ia+=10
+                    ib-=10
+                else:
+                    gs = arr[ia:ib,].mean(axis=0)
+                    break
+            return gs
+        lpos, lneg, rpos, rneg = map(get_gs,
+                [lgs, lgs, rgs, rgs],
+                [-200, 50, -200, 50],
+                [-50, 200, -50, 200])
+        self.ground_gs = [[lneg[0],lpos[0],lneg[1],lpos[1],lneg[2],lpos[2]],
+                [rneg[0],rpos[0],rneg[1],rpos[1],rneg[2],rpos[2]]]

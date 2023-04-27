@@ -66,6 +66,7 @@ class SubjectInfo:
     """ Storing miscellaneous information """
     fname: list
     record_times: dict
+    fs: int
     label_r: str | None
     rowidx: list | None
     recordlen: dict
@@ -99,6 +100,7 @@ class BaseProcess:
         self.info = SubjectInfo(
             fname = 'no_filename',
             record_times = {'L': None, 'R': None},
+            fs = 0,
             label_r = None,
             rowidx = None,
             recordlen = {'L': 0, 'R': 0})
@@ -448,6 +450,8 @@ class BaseProcess:
         arr_b = arr_a[np.nonzero(arr_a[:,2])[0], :]
         movidx = np.zeros((arr_b.shape[0], 3), dtype=int)
 
+        maxmov_dt = 1.5
+
         # arr_b[0,] would be the row with the first nonzero tcount.
         # Smith et al. (2015) has this quote:
         #   "The start of a movement was defined as simultaneous accceleration
@@ -463,7 +467,15 @@ class BaseProcess:
             pairdiff = np.diff(arr_b[i:i+2,:], axis=0).ravel()
             # Two Tcounts are different (-1 vs. 1)
             # Rolling back to the version: Dev 29, 2022
-            if all((pairdiff[2] != 0, pairdiff[0] <= 8)):
+            # Apr 26, 2023:
+            #   If Ax6 (sampling rate: 25 samples/sec) is used,
+            #   the difference in data points between the two opposite-sign
+            #   tcounts should be 8*25/20 = 10.
+            #   Also, a mov duration is no longer than 1.5 sec.
+            #   OpalV2 at 20 samples/sec: 30 points
+            #   Ax6 at 25 samples/sec: 38 points (round up 37.5)
+            tcount_diff = int(8*self.info.fs/20)
+            if all((pairdiff[2] != 0, pairdiff[0] <= tcount_diff)):
                 sidx = arr_b[i+1, 0]     # second threshold crossing
                 if arr_b[i,3] == arr_b[i,2]:  # if th_cross == t_count
                     first_tc = arr_b[i,0]
@@ -472,7 +484,11 @@ class BaseProcess:
                         first_tc = arr_b[i,0]-1
                     else:
                         first_tc = arr_b[i,0]-2
-                fstep = 15 - sidx + first_tc # 8 -> 15 (Feb 9, 2023)
+                # Feb 9, 2023: fstep = 15 - sidx + first_tc
+                # Apr 26, 2023:
+                #   15 (=30/2) was increased from 8.
+                #   30 is 1.5*sampling rate (20 for OpalV2)
+                fstep = int(maxmov_dt*self.info.fs/2 + 1) - sidx + first_tc
                 if all((0 < fstep < first_tc,
                     arr_a[(first_tc-1),3] == arr_a[first_tc,3])):
                     # diffcnt is the index of the point whose count value is
@@ -503,7 +519,7 @@ class BaseProcess:
                 else:
                     movstart = first_tc
 
-                addi = int(movstart + 30)  # a mov < 30 data points
+                addi = int(movstart + np.ceil(maxmov_dt*self.info.fs))
                 try:
                     # movend: the first point that has the "count" value
                     # whose sign is the opposite to that of sidx's 
@@ -608,8 +624,8 @@ class BaseProcess:
             #new_t = self.info.record_times[0]\
             #        + timedelta(seconds=time_passed)
             #end_t = self.info.record_times[1]
-        startidx = time_passed * 20
-        endidx = startidx + duration * 20 + 1
+        startidx = int(time_passed * self.info.fs)
+        endidx = startidx + int(duration  * self.info.fs) + 1
         mov_st = np.where(movidx[:,0] >= startidx)[0]
         mov_fi = np.where(movidx[:,2] <= endidx)[0]
 
@@ -621,7 +637,10 @@ class BaseProcess:
         nthline = ax.axhline(y=self.measures.thresholds[labels[2]],
                 c='k', linestyle='dashed', label='negative threshold')
         ax.axhline(y=0, c='r')  # baseline
-        velline, = ax.plot(self.measures.velmags[labels[0]][startidx:endidx],
+        # If Ax6, convert from 1 deg/s to 0.017453 rad/s
+        rad_convert = 0.017453 if self._name == 'Ax6' else 1
+        velline, = ax.plot(
+                rad_convert*self.measures.velmags[labels[0]][startidx:endidx],
                 c='deepskyblue', linestyle='dashdot', label='angular velocity')
         ax.legend(handles = [accline, pthline, nthline, velline])
 
@@ -653,14 +672,14 @@ class BaseProcess:
                                 self.measures.accmags[labels[0]][hull[j]],
                                 c='g', linewidth=2)
         title = f"{duration}s from "\
-                f"{(self.info.record_times[0] + timedelta(seconds=time_passed)).ctime()}"\
-                f" UTC\n(recording ended at {self.info.record_times[1].ctime()} UTC)"
+                f"{(self.info.record_times[side][0] + timedelta(seconds=time_passed)).ctime()}"\
+                f" UTC\n(recording ended at {self.info.record_times[side][1].ctime()} UTC)"
         ax.set_title(title)
         ax.set_xlabel("Time since onset (sec)")
         ax.set_ylabel("Acc. magnitude (m/s^2)")
-        xticks = np.arange(0, (duration+1)*20, 400)
-        xlabs = [str(x) for x in np.arange(0, (duration+1), 20)]
-        ax.set_xticks(ticks=xticks, labels=xlabs)
+        #xticks = np.arange(0, (duration+1)*20, 400)
+        #xlabs = [str(x) for x in np.arange(0, (duration+1), 20)]
+        #ax.set_xticks(ticks=xticks, labels=xlabs)
 
         plt.show()
 
@@ -678,7 +697,7 @@ def get_axis_offsets(ground_gs):
     """
     return list(map(lambda x: np.array([-1,1,-1,1,-1,1]) - x, ground_gs))
 
-def time_asleep(movmat, recordlen, t0=0, t1_user=None):
+def time_asleep(movmat, recordlen, fs, t0=0, t1_user=None):
     """
     A function to approximate the time the infant was inactive
 
@@ -688,6 +707,8 @@ def time_asleep(movmat, recordlen, t0=0, t1_user=None):
         recordlen: int
             length of the recording
             ex) info.recordlen['R'] of a class object
+        fs: int
+            sampling rate
         t0: int
             initial time, default is 0
         t1_user: int|None
@@ -749,7 +770,7 @@ def time_asleep(movmat, recordlen, t0=0, t1_user=None):
     target = 1
     time_sleep = 0
     mvcnt = movmat.shape[0]
-    len_5_min = 6000 # 5 * 60 * 20
+    len_5_min = 5*60*fs # 6000 for fs=20 samples/sec
 
     while target < (mvcnt-1):
         if target-anchor > 3:
@@ -776,7 +797,7 @@ def time_asleep(movmat, recordlen, t0=0, t1_user=None):
 
     return time_sleep
 
-def cycle_filt(movmat, threshold=4):
+def cycle_filt(movmat, threshold=4, fs=20):
     """
     A function to detect and filter out movements look highly cyclical
 
@@ -786,6 +807,8 @@ def cycle_filt(movmat, threshold=4):
         threshold: int
             difference between the end of one movement and the start of
             the next movement; default is 4
+        fs: int
+            sampling frequency
 
     Returns:
         movmat_del: np.array
@@ -813,7 +836,7 @@ def cycle_filt(movmat, threshold=4):
                 k=j+1
                 counter = 0
                 while all((k < (movmat.shape[0]-1), counter < 3)):
-                    if (movmat[k,0]-movmat[j,2]) < 240:
+                    if (movmat[k,0]-movmat[j,2]) < 12*fs:
                         to_del.append(k)
                         counter+=1
                         k+=1

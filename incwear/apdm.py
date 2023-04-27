@@ -67,6 +67,7 @@ class OpalV2(BaseProcess):
 
             self.info.fname = [filename]
             self.info.record_times = {'L': rts, 'R': rts}
+            self.info.fs = 20
             self.info.label_r = label_r
             self.info.rowidx = rowidx
             self.info.recordlen= {'L': accmags['lmag'].shape[0],
@@ -118,6 +119,7 @@ class OpalV1(BaseProcess):
 
             self.info.fname = [filename]
             self.info.record_times = {'L': rts, 'R': rts}
+            self.info.fs = 20
             self.info.label_r = 'N/A'
             self.info.rowidx = rowidx
             self.info.recordlen = {'L': accmags['lmag'].shape[0],
@@ -159,6 +161,7 @@ class OpalV2Single(BaseProcess):
 
             self.info.fname = [filename]
             self.info.record_times = {'L': rts, 'R': rts}
+            self.info.fs = 20
             self.info.label_r = 'N/A'
             self.info.rowidx = rowidx
             self.info.recordlen = {'L': accmags['lmag'].shape[0],
