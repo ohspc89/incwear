@@ -129,7 +129,7 @@ class BaseProcess:
             datetime_utc: datetime
                 a datetime instance whose value is converted from the time_stamp
         """
-        if self._name == 'OpalV2':
+        if self._name in ['OpalV2', 'OpalV1', 'OpalV2Single']:
             ts = timestamp/1e6
         else:
             ts = timestamp
@@ -301,8 +301,12 @@ class BaseProcess:
             row_idx = list(range(indices[0], indices[1]))
         else:
             row_idx = None
-            print("No recording start and end time provided. \
-                    Analysis done on the entire recording")
+            if self._name == 'OpalV1':
+                print("no recording start and end time provided. \
+                        First clicks will be used as marks.")
+            else:
+                print("No recording start and end time provided. \
+                        Analysis done on the entire recording")
         return row_idx
 
     def _get_count(self):
@@ -677,9 +681,11 @@ class BaseProcess:
         ax.set_title(title)
         ax.set_xlabel("Time since onset (sec)")
         ax.set_ylabel("Acc. magnitude (m/s^2)")
-        #xticks = np.arange(0, (duration+1)*20, 400)
-        #xlabs = [str(x) for x in np.arange(0, (duration+1), 20)]
-        #ax.set_xticks(ticks=xticks, labels=xlabs)
+        # x tick labels to indicate "seconds"
+        def numfmt(x, pos):
+            s = '{}'.format(x/self.info.fs)
+            return s
+        ax.xaxis.set_major_formatter(numfmt)
 
         plt.show()
 
