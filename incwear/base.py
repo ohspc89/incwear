@@ -259,7 +259,11 @@ class BaseProcess:
                 If no time is found, return None.
         """
         # index where button is first pressed
-        indexed1 = np.where(sensorobj['ButtonStatus'][:]==1)[0][0]
+        # This is the option for Opal V1 only.
+        try:
+            indexed1 = np.where(sensorobj['ButtonStatus'][:]==1)[0][0]
+        except:
+            pass
         if in_en_dts is not None:
             # d_in_micro is the list of TWO datetime.timedelta objects
             # The first element of this list shows the time difference
