@@ -258,6 +258,8 @@ class BaseProcess:
                 corresponds to the start and the end of the recording.
                 If no time is found, return None.
         """
+        # index where button is first pressed
+        indexed1 = np.where(sensorobj['ButtonStatus'][:]==1)[0][0]
         if in_en_dts is not None:
             # d_in_micro is the list of TWO datetime.timedelta objects
             # The first element of this list shows the time difference
@@ -277,6 +279,9 @@ class BaseProcess:
             #       sensors were turned off long before the reported
             #       doff_t and this exception needs to be handled by
             #       simply taking the last value of the time series
+            if self._name == 'OpalV1':
+                # overwrite whatever's given as the start of the recording
+                in_en_dts[0] = self._calc_datetime(sensorobj['Time'][indexed1])
             d_in_micro = list(map(
                 lambda x: x - self._calc_datetime(sensorobj['Time'][0]), in_en_dts))
             convert = 1e6    # conversion constant: 1 second = 1e6 microseconds
@@ -300,11 +305,12 @@ class BaseProcess:
             # This will be one input to self._get_mag
             row_idx = list(range(indices[0], indices[1]))
         else:
-            row_idx = None
             if self._name == 'OpalV1':
-                print("no recording start and end time provided. \
-                        First clicks will be used as marks.")
+                print("No recording start and end time provided. \
+                        Data starts from the first click of the button.")
+                row_idx = list(range(indexed1, sensorobj['Time'].shape[0]-1))
             else:
+                row_idx = None
                 print("No recording start and end time provided. \
                         Analysis done on the entire recording")
         return row_idx

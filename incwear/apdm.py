@@ -59,7 +59,9 @@ class OpalV2(BaseProcess):
 
             if rowidx is not None:
                 rts = [self._calc_datetime(sensors[sids[1]]['Time'][0]) +\
-                        timedelta(seconds=rowidx[0]*0.05), in_en_dts[1]]
+                        timedelta(seconds=rowidx[0]*0.05),
+                        self._calc_datetime(sensors[sids[1]]['Time'][0])+\
+                                timedelta(seconds=rowidx[-1]*0.05)]
             else:
                 rts = list(map(self._calc_datetime,
                     [sensors[sids[1]]['Time'][0],
@@ -111,17 +113,18 @@ class OpalV1(BaseProcess):
 
             if rowidx is not None:
                 rts = [self._calc_datetime(sensors[sids[1]]['Time'][0])+\
-                        timedelta(seconds=rowidx[0]*0.05), in_en_dts[1]]
+                        timedelta(seconds=rowidx[0]*0.05),
+                        self._calc_datetime(sensors[sids[1]]['Time'][0])+\
+                                timedelta(seconds=rowidx[-1]*0.05)]
             else:
                 # make use of the button press information
                 try:
                     indexed1 = np.where(sensors[sids[0]]['ButtonStatus'][:]==1)[0]
                 except:
                     indexed1 = np.where(sensors[sids[1]]['ButtonStatus'][:]==1)[0]
-                diffgt1 = np.where(np.diff(indexed1) > 1)[0]
                 rts = list(map(self._calc_datetime,
                     [sensors[sids[1]]['Time'][indexed1[0]],
-                        sensors[sids[1]]['Time'][diffgt1[0]+1]]))
+                        sensors[sids[1]]['Time'][-1]]))
 
             self.info.fname = [filename]
             self.info.record_times = {'L': rts, 'R': rts}
@@ -159,7 +162,9 @@ class OpalV2Single(BaseProcess):
 
             if rowidx is not None:
                 rts = [self._calc_datetime(sensors[sids]['Time'][0])+\
-                        timedelta(seconds=rowidx[0]*0.05), in_en_dts[1]]
+                        timedelta(seconds=rowidx[0]*0.05),
+                        self._calc_datetime(sensors[sids]['Time'][0])+\
+                                timedelta(seconds=rowidx[-1]*0.05)]
             else:
                 rts = list(map(self._calc_datetime,
                     [sensors[sids]['Time'][0],
