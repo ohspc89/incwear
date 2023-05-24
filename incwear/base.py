@@ -33,7 +33,8 @@ from datetime import datetime, timedelta, timezone
 from itertools import chain
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.signal import find_peaks, detrend
+from scipy.signal import find_peaks, detrend, firwin, lfilter
+from scipy.interpolate import interp1d, CubicSpline
 import pytz
 
 @dataclass
@@ -50,23 +51,31 @@ class Processed:
     #  0: otherwise
     th_crossed: dict = field(init=False)
     def __post_init__(self):
-        lpos_temp = self.accmags['lmag'] > self.thresholds['laccth']
-        lneg_temp = self.accmags['lmag'] < self.thresholds['lnaccth']
-        rpos_temp = self.accmags['rmag'] > self.thresholds['raccth']
-        rneg_temp = self.accmags['rmag'] < self.thresholds['rnaccth']
+        if len(self.accmags.keys())==2:
+            lpos_temp = self.accmags['lmag'] > self.thresholds['laccth']
+            lneg_temp = self.accmags['lmag'] < self.thresholds['lnaccth']
+            rpos_temp = self.accmags['rmag'] > self.thresholds['raccth']
+            rneg_temp = self.accmags['rmag'] < self.thresholds['rnaccth']
 
-        self.over_accth = {'L': lpos_temp, 'R': rpos_temp}
-        self.under_naccth = {'L': lneg_temp, 'R': rneg_temp}
+            self.over_accth = {'L': lpos_temp, 'R': rpos_temp}
+            self.under_naccth = {'L': lneg_temp, 'R': rneg_temp}
 
-        self.th_crossed = {
-                'L': lpos_temp + lneg_temp * -1,
-                'R': rpos_temp + rneg_temp * -1}
+            self.th_crossed = {
+                    'L': lpos_temp + lneg_temp * -1,
+                    'R': rpos_temp + rneg_temp * -1}
+        else:
+            lpos_temp = self.accmags['umag'] > self.thresholds['accth']
+            lneg_temp = self.accmags['umag'] < self.thresholds['naccth']
+            self.over_accth = {'U': lpos_temp}      # L: it's actually unidentified
+            self.under_naccth = {'U': lneg_temp}
+            self.th_crossed = {'U': lpos_temp + lneg_temp * -1}
 @dataclass
 class SubjectInfo:
     """ Storing miscellaneous information """
     fname: list
     record_times: dict
     fs: int
+    timezone: str
     label_r: str | None
     rowidx: list | None
     recordlen: dict
@@ -101,6 +110,7 @@ class BaseProcess:
             fname = 'no_filename',
             record_times = {'L': None, 'R': None},
             fs = 0,
+            timezone = '',
             label_r = None,
             rowidx = None,
             recordlen = {'L': 0, 'R': 0})
@@ -114,7 +124,6 @@ class BaseProcess:
                 'lnaccth': -1,
                 'raccth': 1,
                 'rnaccth': -1})
-
 
     # This function will calculate the actual date and time from the time recorded in the sensor
     def _calc_datetime(self, timestamp):
@@ -169,7 +178,7 @@ class BaseProcess:
             return mag
 
         # Use np.linalg.norm... amazing!
-        lmag, rmag = map(linalg_norm,
+        mags = map(linalg_norm,
                 list(sensors.values()),
                 [row_idx, row_idx])
 
@@ -177,11 +186,11 @@ class BaseProcess:
         #   so we can consider that the default option
         #   for detrending the data is subtracting the median
         if det_option == 'median':
-            out = map(lambda x: x - np.median(x), [lmag, rmag])
+            out = map(lambda x: x - np.median(x), mags)
         else:
             # detrend every 1000 seconds (20000 data points)
             # Now you have to convert the map objects to lists
-            lmaglist, rmaglist = list(lmag), list(rmag)
+            lmaglist, rmaglist = list(mags)
             tempx, tempy = [], []
             binsize = np.ceil(len(lmaglist)/20000)
             for i in range(int(binsize)):
@@ -190,12 +199,70 @@ class BaseProcess:
 
             out = [np.array(tempx), np.array(tempy)]
 
-        return dict(zip(['lmag', 'rmag'], out))
+        # if only one sensor is processed
+        if len(sensors.keys())-1:
+            return dict(zip(['lmag', 'rmag'], out))
+        else:
+            return({'umag':list(out)[0]})
 
-    # winsize in second unit
-    def _mov_avg_filt(self, winsize, pd_series):
-        win_len = int(20 * winsize)   # sfreq = 20Hz
-        return pd_series.rolling(win_len).mean()
+    @staticmethod
+    def remove_offset(arr, offsets):
+        """
+        a function that removes offsets from measurements
+
+        Parameters:
+            arr: numpy.array
+                raw accelerometer data
+            offsets: list
+                list of axis/orientation specific offsets
+
+        Returns:
+            an array - offset removed accelerometer data
+        """
+        xoffs = np.array([offsets[0], 0, offsets[1]])
+        yoffs = np.array([offsets[2], 0, offsets[3]])
+        zoffs = np.array([offsets[4], 0, offsets[5]])
+        xidx = np.sign(arr[:,0]).astype(int)+1
+        yidx = np.sign(arr[:,1]).astype(int)+1
+        zidx = np.sign(arr[:,2]).astype(int)+1
+        newx = [x + xoffs[xi] for x, xi in zip(arr[:,0], xidx)]
+        newy = [y + yoffs[yi] for y, yi in zip(arr[:,1], yidx)]
+        newz = [z + zoffs[zi] for z, zi in zip(arr[:,2], zidx)]
+        return np.vstack((newx, newy, newz)).T
+
+    @staticmethod
+    def low_pass(fc, fs, arr, window='hamming'):
+        """
+        low-pass filter the data, using the provided
+        cut-off frequency (fc).
+        As it's a simple first-order low-pass filter,
+        limit the window choice to hamming.
+        """
+        h = firwin(2, cutoff=fc, window=window, fs=fs)
+        return lfilter(h, 1, arr)
+
+    @staticmethod
+    def local_to_utc(timestamp, study_tz):
+        local = datetime.fromtimestamp(timestamp,
+                pytz.timezone(study_tz))
+        return local.astimezone(pytz.utc)
+
+    @staticmethod
+    def resample_to(timearr, arr, intp_option, re_fs):
+        """
+        Downsample the data to a resampling frequency (re_fs).
+        If rsf = 20(Hz), it's the sampling frequency of
+        Opal V2. Interpolation option (intp_option) is provided
+        """
+        assert(intp_option in ['cubic', 'linear']),\
+                "intp_option should be cubic or linear"
+        if intp_option == 'cubic':
+            intp = CubicSpline(timearr, arr, axis=0)
+        else:
+            intp = interp1d(timearr, arr, axis=0)
+
+        nt = np.round(np.arange(timearr[0], timearr[-1], 1/re_fs), 2)
+        return intp(nt)
 
     def _calc_ind_threshold(self, maxprop):
         """
@@ -237,8 +304,13 @@ class BaseProcess:
                     [posvals, negvals])
         accths = map(self._calc_ind_threshold, chain(*pnpks))
 
-        tkeys = ['laccth', 'raccth', 'lnaccth', 'rnaccth']
-        return dict(zip(tkeys, np.multiply([1,1,-1,-1], list(accths))))
+        if len(accmags.keys())-1:
+            tkeys = ['laccth', 'raccth', 'lnaccth', 'rnaccth']
+            signvec = [1,1,-1,-1]
+        else:
+            tkeys = ['accth', 'naccth']
+            signvec = [1,-1]
+        return dict(zip(tkeys, np.multiply(signvec, list(accths))))
 
     def _prep_row_idx(self, sensorobj, in_en_dts):
         """
@@ -331,7 +403,7 @@ class BaseProcess:
 
         Returns:
             acounts2: list
-                count values (L/R)
+                count values (L/U/R)
         """
         raw_counts = map(np.sign, self.measures.accmags.values())
         acounts = [np.multiply(x, y) for x, y in\
@@ -340,7 +412,7 @@ class BaseProcess:
                         self.measures.velmags.values()))]
         return acounts
 
-    def _get_cntc(self):
+    def _get_cntc(self, side='L'):
         """
         A function to get counts and tcounts
 
@@ -361,23 +433,25 @@ class BaseProcess:
         #temp_negth_l = np.where(self.measures.under_naccth['L'])[0]
         #temp_negth_r = np.where(self.measures.under_naccth['R'])[0]
 
-        temp_l = map(lambda x: np.where(x)[0],
-                [self.measures.over_accth['L'],
-                    self.measures.under_naccth['L']])
+        temp = map(lambda x: np.where(x)[0],
+                [self.measures.over_accth[side],
+                    self.measures.under_naccth[side]])
 
-        temp_r = map(lambda x: np.where(x)[0],
-                [self.measures.over_accth['R'],
-                    self.measures.under_naccth['R']])
+        #temp_r = map(lambda x: np.where(x)[0],
+        #        [self.measures.over_accth['R'],
+        #            self.measures.under_naccth['R']])
 
         # angular velocity should be taken into account...
         # let's just make sure that the detrended angvel[i] > 0
-        angvel_gt_l = np.nonzero(acounts[0])[0]
-        angvel_gt_r = np.nonzero(acounts[1])[0]
+        if side == 'R':
+            angvel_gt = np.nonzero(acounts[1])[0]
+        else:
+            angvel_gt = np.nonzero(acounts[0])[0]
 
-        over_posth_l, under_negth_l = map(lambda x:
-                np.intersect1d(x, angvel_gt_l), temp_l)
-        over_posth_r, under_negth_r = map(lambda x:
-                np.intersect1d(x, angvel_gt_r), temp_r)
+        over_posth, under_negth = map(lambda x:
+                np.intersect1d(x, angvel_gt), temp)
+        #over_posth_r, under_negth_r = map(lambda x:
+        #        np.intersect1d(x, angvel_gt_r), temp_r)
 
         def mark_tcount(over_th_arr, acounts, pos=True):
             """
@@ -429,13 +503,20 @@ class BaseProcess:
 
             return t_count
 
-        ltcounts  = mark_tcount(over_posth_l, acounts[0], pos=True)
-        lntcounts = mark_tcount(under_negth_l, acounts[0], pos=False)
-        rtcounts  = mark_tcount(over_posth_r, acounts[1], pos=True)
-        rntcounts = mark_tcount(under_negth_r, acounts[1], pos=False)
+        if side == 'R':
+            usecount = acounts[1]
+        else:
+            usecount = acounts[0]
+        ttcounts = mark_tcount(over_posth, usecount, pos=True)
+        tntcounts = mark_tcount(under_negth, usecount, pos=False)
+        #ltcounts  = mark_tcount(over_posth_l, acounts[0], pos=True)
+        #lntcounts = mark_tcount(under_negth_l, acounts[0], pos=False)
+        #rtcounts  = mark_tcount(over_posth_r, acounts[1], pos=True)
+        #rntcounts = mark_tcount(under_negth_r, acounts[1], pos=False)
 
-        return dict(zip(['L', 'R'], [[acounts[0], ltcounts+lntcounts],
-                                     [acounts[1], rtcounts+rntcounts]]))
+        #return dict(zip(['L', 'R'], [[acounts[0], ltcounts+lntcounts],
+        #                             [acounts[1], rtcounts+rntcounts]]))
+        return {side:[usecount, ttcounts + tntcounts]}
 
     def get_mov(self, side='L'):
         """
@@ -443,18 +524,18 @@ class BaseProcess:
 
         Parameters:
             side: str
-                'L'eft or 'R'ight
+                'L'eft, 'R'ight, or 'U'nilateral
 
         Returns:
             tmov: list
                 movement counts (L/R)
         """
 
-        assert(side in ['L', 'R']), "side should be 'L' or 'R'"
+        assert(side in ['L', 'R', 'U']), "side should be 'L', 'R', or 'U'"
 
         # tcounts is a dictionary (keys: 'L', 'R')
         # Each value is a list of TWO lists (counts, tcounts)
-        tcounts = self._get_cntc()
+        tcounts = self._get_cntc(side)
 
         # index | count | tcount | th_crossed
         arr_a = np.column_stack((np.arange(len(tcounts[side][0])),
@@ -578,7 +659,7 @@ class BaseProcess:
 
         Parameters:
             side: str
-                'L' or 'R'
+                'L' ,'R', or 'U'
             movmat: None | np.array
                 matrix that stores movements' indices
 
@@ -586,7 +667,7 @@ class BaseProcess:
             acc_arr: numpy ndarray
                 [mov start | ave accmag for mov[i] | peak accmag for mov[i]]
         """
-        assert(side in ['L', 'R']), "side should be 'L' or 'R'"
+        assert(side in ['L', 'R', 'U']), "side should be 'L', 'R', or 'U'"
 
         if movmat is not None:
             movidx = movmat
@@ -595,6 +676,8 @@ class BaseProcess:
 
         if side == 'L':
             accvec = np.abs(self.measures.accmags['lmag'].copy())
+        elif side == 'U':
+            accvec = np.abs(self.measures.accmags['umag'].copy())
         else:
             accvec = np.abs(self.measures.accmags['rmag'].copy())
 
@@ -615,12 +698,12 @@ class BaseProcess:
                 duration in seconds, default is 20
 
             side: str
-                'L' or 'R'
+                'L', 'R', or 'U'
 
         Returns:
             a diagnostic figure to check movement counts
         """
-        assert(side in ['L', 'R']), "side should be 'L' or 'R'"
+        assert(side in ['L', 'R', 'U']), "side should be 'L', 'R', or 'U'"
 
         if movmat is not None:
             movidx = movmat
@@ -629,6 +712,8 @@ class BaseProcess:
 
         if side == 'L':
             labels = ['lmag', 'laccth', 'lnaccth']
+        elif side == 'U':
+            labels = ['umag', 'accth', 'naccth']
         else:
             labels = ['rmag', 'raccth', 'rnaccth']
 
@@ -652,7 +737,7 @@ class BaseProcess:
                 c='k', linestyle='dashed', label='negative threshold')
         ax.axhline(y=0, c='r')  # baseline
         # If Ax6, convert from 1 deg/s to 0.017453 rad/s
-        rad_convert = 0.017453 if self._name == 'Ax6' else 1
+        rad_convert = 0.017453 if self._name in ['Ax6', 'Ax6Single'] else 1
         velline, = ax.plot(
                 rad_convert*self.measures.velmags[labels[0]][startidx:endidx],
                 c='deepskyblue', linestyle='dashdot', label='angular velocity')
@@ -711,7 +796,11 @@ def get_axis_offsets(ground_gs):
     Returns:
         list of axis/orientation specific offsets
     """
-    return list(map(lambda x: np.array([-1,1,-1,1,-1,1]) - x, ground_gs))
+    # If it is a list of TWO lists...
+    if len(ground_gs) == 2:
+        return list(map(lambda x: np.array([-1,1,-1,1,-1,1]) - x, ground_gs))
+    else:
+        return np.array([-1,1,-1,1,-1,1]) - ground_gs
 
 def time_asleep(movmat, recordlen, fs, t0=0, t1_user=None):
     """
@@ -962,4 +1051,3 @@ def make_start_end_datetime(redcap_csv, filename, site):
     # site-specific don/doff times are converted to UTC time
     utc_don_doff = list(map(lambda lst: convert_to_utc(lst, site), [don_dt, doff_dt]))
     return utc_don_doff
-
