@@ -1,7 +1,7 @@
-from datetime import datetime, timezone, timedelta
+from datetime import timedelta
 import numpy as np
 import h5py
-from base import BaseProcess, make_start_end_datetime, cycle_filt, time_asleep
+from base import BaseProcess, make_start_end_datetime, cycle_filt, time_asleep, rate_calc
 
 class SensorMissingError(Exception):
     """ If a sensor recording is missing, raise an error """
@@ -100,7 +100,10 @@ class OpalV2(BaseProcess):
 
             self.info.fname = [filename]
             self.info.record_times = {'L': rts, 'R': rts}
-            self.info.fs = 20
+            if 'fs' in kwargs:
+                self.info.fs = kwargs.get('fs')
+            else:
+                self.info.fs = 20   # default: 20 S/s
             self.info.label_r = label_r
             self.info.rowidx = rowidx
             self.info.recordlen= {'L': accmags_f['lmag'].shape[0],
@@ -116,7 +119,7 @@ class OpalV1(BaseProcess):
     A class that will store (preliminarily) processed data
         recorded in a pair of Opal V1 sensors
     """
-    def __init__(self, filename, in_en_dts):
+    def __init__(self, filename, in_en_dts, **kwargs):
         super().__init__(filename = filename,
                 in_en_dts = in_en_dts)
 
@@ -134,13 +137,28 @@ class OpalV1(BaseProcess):
             sensordict = {'L': sensors[sids[0]],
                     'R': sensors[sids[1]]}
             rowidx = self._prep_row_idx(sensordict['L'], in_en_dts)
+            print(rowidx[0], rowidx[-1])
 
             accmags = self._get_mag(
                     {x:sensordict[x]['Calibrated']['Accelerometers'] for x in ['L', 'R']}, rowidx)
             velmags = self._get_mag(
                     {x:sensordict[x]['Calibrated']['Gyroscopes'] for x in ['L', 'R']}, rowidx)
 
-            thresholds = self._get_ind_acc_threshold(accmags)
+            if 'filter' in kwargs:
+                try:
+                    accmags_f = {
+                            'lmag': self.low_pass(kwargs.get('fc'),
+                                kwargs.get('fs'),
+                                accmags['lmag']),
+                            'rmag': self.low_pass(kwargs.get('fc'),
+                                kwargs.get('fs'),
+                                accmags['rmag'])}
+                except:
+                    raise ValueError("fc and fs should be provided if you're filtering the data")
+            else:
+                accmags_f = accmags
+
+            thresholds = self._get_ind_acc_threshold(accmags_f)
 
             if rowidx is not None:
                 rts = [self._calc_datetime(sensors[sids[1]]['Time'][0])+\
@@ -162,9 +180,9 @@ class OpalV1(BaseProcess):
             self.info.fs = 20
             self.info.label_r = 'N/A'
             self.info.rowidx = rowidx
-            self.info.recordlen = {'L': accmags['lmag'].shape[0],
-                    'R': accmags['rmag'].shape[0]}
-            self.measures.accmags = accmags
+            self.info.recordlen = {'L': accmags_f['lmag'].shape[0],
+                    'R': accmags_f['rmag'].shape[0]}
+            self.measures.accmags = accmags_f
             self.measures.velmags = velmags
             self.measures.thresholds = thresholds
             self.measures.__post_init__()
@@ -219,7 +237,10 @@ class OpalV2Single(BaseProcess):
 
             self.info.fname = filename
             self.info.record_times = {'U': rts}
-            self.info.fs = 20
+            if 'fs' in kwargs:
+                self.info.fs = kwargs.get('fs')
+            else:
+                self.info.fs = 20   # default: 20 S/s
             self.info.label_r = 'N/A'
             self.info.rowidx = rowidx
             self.info.recordlen = {'U': accmags_f['umag'].shape[0]}

@@ -1,7 +1,7 @@
-from datetime import timedelta
+#from datetime import timedelta
 import numpy as np
 from skdh.io import ReadCwa
-from base import BaseProcess, cycle_filt, time_asleep, get_axis_offsets
+from base import BaseProcess, cycle_filt, time_asleep, get_axis_offsets, rate_calc
 
 class Ax6(BaseProcess):
     """
@@ -85,19 +85,10 @@ class Ax6(BaseProcess):
 
         thresholds = self._get_ind_acc_threshold(accmags_f)
 
-        rts = {'L': list(map(self.local_to_utc,
-            [l_skdh['time'][0], l_skdh['time'][-1]],
-            [study_tz, study_tz])),
-            'R': list(map(self.local_to_utc,
-                [r_skdh['time'][0], r_skdh['time'][-1]],
-                [study_tz, study_tz]))}
-
-        # Axivity sensors are werid... times are somewhat weird...
-        utcoff = rts['L'][0].utcoffset().total_seconds()
-        rts['L'] = list(map(lambda x: x-timedelta(seconds = utcoff),
-            [rts['L'][0], rts['L'][1]]))
-        rts['R'] = list(map(lambda x: x-timedelta(seconds = utcoff),
-            [rts['R'][0], rts['R'][1]]))
+        rts = {'L': list(map(self._calc_datetime,
+            [l_skdh['time'][0], l_skdh['time'][-1]])),
+            'R': list(map(self._calc_datetime,
+                [r_skdh['time'][0], r_skdh['time'][-1]]))}
 
         # update relevant information
         self.info.fname = [Lfilename, Rfilename]
@@ -211,14 +202,8 @@ class Ax6Single(BaseProcess):
 
         thresholds = self._get_ind_acc_threshold(accmags_f)
 
-        rts = {'U': list(map(self.local_to_utc,
-            [l_skdh['time'][0], l_skdh['time'][-1]],
-            [study_tz, study_tz]))}
-
-        # Axivity sensors are werid... times are somewhat weird...
-        utcoff = rts['U'][0].utcoffset().total_seconds()
-        rts['U'] = list(map(lambda x: x-timedelta(seconds = utcoff),
-            [rts['U'][0], rts['U'][1]]))
+        rts = {'U': list(map(self._calc_datetime,
+            [l_skdh['time'][0], l_skdh['time'][-1]]))}
 
         # update relevant information
         self.info.fname = filename

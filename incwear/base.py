@@ -30,8 +30,9 @@ Original script exports the following values:
 from dataclasses import dataclass, field
 import re
 from datetime import datetime, timedelta, timezone
-from itertools import chain
+from itertools import chain, repeat
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.signal import find_peaks, detrend, firwin, lfilter
 from scipy.interpolate import interp1d, CubicSpline
@@ -107,7 +108,7 @@ class BaseProcess:
 
         # Placehodler - will be updated
         self.info = SubjectInfo(
-            fname = 'no_filename',
+            fname = ['no_filename'],
             record_times = {'L': None, 'R': None},
             fs = 0,
             timezone = '',
@@ -133,6 +134,8 @@ class BaseProcess:
         Parameters:
             timestamp: int
                 a timestamp in units of microseconds since 1970-1-1-0:00 UTC
+                For Opal sensors, you can directly transform this to a datetime object
+                For Axivity sensors, dtype is numpy.datetime64.
 
         Returns:
             datetime_utc: datetime
@@ -140,9 +143,11 @@ class BaseProcess:
         """
         if self._name in ['OpalV2', 'OpalV1', 'OpalV2Single']:
             ts = timestamp/1e6
-        else:
-            ts = timestamp
-        datetime_utc = datetime.fromtimestamp(ts, timezone.utc)
+            datetime_utc = datetime.fromtimestamp(ts, timezone.utc)
+        elif self._name in ['Ax6', 'Ax6Single']:
+            ts = np.array(timestamp*1e3, dtype='datetime64[ms]')
+            datetime_local = pd.to_datetime(ts).tz_localize(self.info.timezone)
+            datetime_utc = datetime_local.astimezone(pytz.utc)
         return datetime_utc
 
     def _get_mag(self, sensors, row_idx=None, det_option='median'):
@@ -335,7 +340,7 @@ class BaseProcess:
         try:
             indexed1 = np.where(sensorobj['ButtonStatus'][:]==1)[0][0]
         except:
-            pass
+            indexed1 = 0
         if in_en_dts is not None:
             # d_in_micro is the list of TWO datetime.timedelta objects
             # The first element of this list shows the time difference
@@ -355,7 +360,7 @@ class BaseProcess:
             #       sensors were turned off long before the reported
             #       doff_t and this exception needs to be handled by
             #       simply taking the last value of the time series
-            if self._name == 'OpalV1':
+            if indexed1:
                 # overwrite whatever's given as the start of the recording
                 in_en_dts[0] = self._calc_datetime(sensorobj['Time'][indexed1])
             d_in_micro = list(map(
@@ -381,7 +386,7 @@ class BaseProcess:
             # This will be one input to self._get_mag
             row_idx = list(range(indices[0], indices[1]))
         else:
-            if self._name == 'OpalV1':
+            if indexed1:
                 print("No recording start and end time provided. \
                         Data starts from the first click of the button.")
                 row_idx = list(range(indexed1, sensorobj['Time'].shape[0]-1))
@@ -954,6 +959,48 @@ def cycle_filt(movmat, threshold=4, fs=20):
             i+=1
     movmat_del = np.delete(movmat, to_del, 0)
     return movmat_del
+
+def rate_calc(lmovmat, rmovmat, thr, recordlen, fs):
+    """
+    A function to calculate movement rate and return
+    other relevant measures, such as sleep time
+
+    Parameters:
+        lmovmat, rmovmat: np.array
+            movement matrices for the left/right sides
+        thr: int
+            equal to the threshold value in cycle_filt function.
+            difference between the end of one movement and the start of
+            the next movement; 4 for 20 S/s, 5 for 25 S/s (= 0.2 seconds)
+        recordlen: int
+            length of a recording; use '.info.recordlen.values()'
+        fs: int
+            Sampling frequency; if the movement matrices are downsampled,
+            put in the frequency used for resampling.
+
+    Returns:
+        a dictionary with the following items:
+            lrate, rrate: movement rates
+            lrec_hr, rrec_hr: recording length in hours
+            lsleep_hr, rsleep_hr: sleep hours
+    """
+    lmovs_del, rmovs_del = map(cycle_filt,
+            [lmovmat, rmovmat],
+            repeat(thr, 2))
+    lsleep, rsleep = map(time_asleep,
+            [lmovs_del, rmovs_del],
+            recordlen,
+            repeat(fs,2))
+    lsleep_5m, rsleep_5m = map(lambda x: x/(60*fs) - np.mod(x/(60*fs), 5),
+            [lsleep, rsleep])
+    lrec_hr = recordlen[0]/(3600*fs)
+    rrec_hr = recordlen[1]/(3600*fs)
+    lsleep_hr, rsleep_hr = map(lambda x: x/60, [lsleep_5m, rsleep_5m])
+    lmovrate = lmovs_del.shape[0]/(lrec_hr-lsleep_hr)
+    rmovrate = rmovs_del.shape[0]/(rrec_hr-rsleep_hr)
+    return {'lrate':lmovrate, 'rrate':rmovrate,
+            'lrec_hr':lrec_hr, 'rrec_hr':rrec_hr,
+            'lsleep_hr':lsleep_hr, 'rsleep_hr':rsleep_hr}
 
 def make_start_end_datetime(redcap_csv, filename, site):
     """
