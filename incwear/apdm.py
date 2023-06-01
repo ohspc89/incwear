@@ -120,6 +120,11 @@ class OpalV1(BaseProcess):
         recorded in a pair of Opal V1 sensors
     """
     def __init__(self, filename, in_en_dts, **kwargs):
+        """
+        **kwargs:
+        lsensorlist: list
+            a list of sensor id's used to measure left leg movement
+        """
         super().__init__(filename = filename,
                 in_en_dts = in_en_dts)
 
@@ -133,11 +138,31 @@ class OpalV1(BaseProcess):
             elif len(sids) == 0:
                 raise SensorMissingError("No sensor recording exists")
 
-            # This should be checked (4/3/23)
-            sensordict = {'L': sensors[sids[0]],
-                    'R': sensors[sids[1]]}
-            rowidx = self._prep_row_idx(sensordict['L'], in_en_dts)
-            print(rowidx[0], rowidx[-1])
+            # Determine based on the log: which sensor ids were used to measure
+            # left leg movements?
+            if 'lsensorlist' in kwargs:
+                is_l = sids[1] in kwargs.get('lsensorlist')
+            # If no log is provided, the first id corresponds to the left
+            else:
+                is_l = False
+            print('LEFT SENSOR ID: ', sids[is_l])
+            sensordict = {'L': sensors[sids[is_l]],
+                    'R': sensors[sids[~is_l]]}
+            # We don't know which of the two sensors' button was pressed...
+            try:
+                indexed1 = np.where(sensordict['L']['ButtonStatus'][:]==1)[0][0]
+                print('Left Button Pressed: ', indexed1)
+                rowidx = self._prep_row_idx(sensordict['L'], in_en_dts)
+            except:
+                try:
+                    indexed1 = np.where(sensordict['R']['ButtonStatus'][:]==1)[0][0]
+                    print('Right Button Pressed: ', indexed1)
+                except:
+                    indexed1 = [0][0]
+                    print('No Button Press ', indexed1)
+                rowidx = self._prep_row_idx(sensordict['R'], in_en_dts)
+
+            print('Range of the data points: ', rowidx[0], rowidx[-1])
 
             accmags = self._get_mag(
                     {x:sensordict[x]['Calibrated']['Accelerometers'] for x in ['L', 'R']}, rowidx)
@@ -167,12 +192,8 @@ class OpalV1(BaseProcess):
                                 timedelta(seconds=rowidx[-1]*0.05)]
             else:
                 # make use of the button press information
-                try:
-                    indexed1 = np.where(sensors[sids[0]]['ButtonStatus'][:]==1)[0]
-                except:
-                    indexed1 = np.where(sensors[sids[1]]['ButtonStatus'][:]==1)[0]
                 rts = list(map(self._calc_datetime,
-                    [sensors[sids[1]]['Time'][indexed1[0]],
+                    [sensors[sids[1]]['Time'][indexed1],
                         sensors[sids[1]]['Time'][-1]]))
 
             self.info.fname = [filename]
