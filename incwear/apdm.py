@@ -217,6 +217,7 @@ class OpalV2Single(BaseProcess):
         with h5py.File(filename, 'r') as h5file:
             sensors = h5file['Sensors']
             sids = list(sensors.keys())[0]
+            print(sids)
 
             #sensordict = {'L': sensors[sids],
             #        'R': sensors[sids]}
@@ -254,7 +255,7 @@ class OpalV2Single(BaseProcess):
             else:
                 rts = list(map(self._calc_datetime,
                     [sensors[sids]['Time'][0],
-                        sensors[sids['Time'][-1]]]))
+                        sensors[sids]['Time'][-1]]]))
 
             self.info.fname = filename
             self.info.record_times = {'U': rts}
