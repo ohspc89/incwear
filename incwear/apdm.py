@@ -1,7 +1,8 @@
 from datetime import timedelta
 import numpy as np
 import h5py
-from base import BaseProcess, make_start_end_datetime, cycle_filt, time_asleep, rate_calc
+from base import BaseProcess, make_start_end_datetime,\
+        cycle_filt, time_asleep, rate_calc, get_axis_offsets_v2
 
 class SensorMissingError(Exception):
     """ If a sensor recording is missing, raise an error """
@@ -12,8 +13,7 @@ class OpalV2(BaseProcess):
     A class that will store (preliminarily) processed data
         recorded in the OPAL V2sensors
     """
-    def __init__(self, filename, in_en_dts, label_r,
-            **kwargs):
+    def __init__(self, filename, in_en_dts, label_r, **kwargs):
         """
         Parameters:
             filename: str
@@ -23,6 +23,9 @@ class OpalV2(BaseProcess):
             label_r: str
                 string that identifies the "r"ight side
             **kwargs
+            misalign: dict(list)
+                a dictionary whose items are left and right
+                sensors' axis misalignment error
             fs: int
                 sampling frequency
             filter: boolean
@@ -64,10 +67,10 @@ class OpalV2(BaseProcess):
 
             # Accelerometer and Gyrocscope norms / this part takes some time
             accmags = self._get_mag(
-                    {x:sensordict[x]['Accelerometer'] for x in ['L', 'R']},
+                    {x: sensordict[x]['Accelerometer'] for x in ['L', 'R']},
                     rowidx)
             velmags = self._get_mag(
-                    {x:sensordict[x]['Gyroscope'] for x in ['L', 'R']}, 
+                    {x: sensordict[x]['Gyroscope'] for x in ['L', 'R']},
                     rowidx)
             
             if 'filter' in kwargs:
@@ -210,9 +213,8 @@ class OpalV1(BaseProcess):
 
 class OpalV2Single(BaseProcess):
     """ Single Opal V2 Sensor """
-    def __init__(self, filename, in_en_dts, **kwargs):
-        super().__init__(filename = filename,
-                in_en_dts = in_en_dts)
+    def __init__(self, filename, in_en_dts, ground_gs=None, **kwargs):
+        super().__init__(filename=filename, in_en_dts=in_en_dts)
 
         with h5py.File(filename, 'r') as h5file:
             sensors = h5file['Sensors']
@@ -229,10 +231,44 @@ class OpalV2Single(BaseProcess):
             #velmags = self._get_mag(
             #        {x:sensordict[x]['Gyroscope'] for x in ['L', 'R']},
             #        rowidx)
-            accmags = self._get_mag(
-                    {'L':sensordict['L']['Accelerometer']})
+            if 'offset' in kwargs:
+                l_aligned = sensordict['L']['Accelerometer'] -\
+                        np.array(kwargs.get('offset'))
+            else:
+                l_aligned = sensordict['L']['Accelerometer']
+
+            if ground_gs is not None:
+                offset_rm = self.remove_offset(l_aligned,
+                                               get_axis_offsets_v2(ground_gs))
+                # If Gain/Offset corrected, 9.80665 should be multiplied again
+                offset_rm = 9.80665*offset_rm
+            else:
+                offset_rm = l_aligned
+
+            if 'filter' in kwargs:
+                try:
+                    filt_x = self.low_pass(kwargs.get('fc'),
+                                           kwargs.get('fs'),
+                                           offset_rm[:,0])
+                    filt_y = self.low_pass(kwargs.get('fc'),
+                                           kwargs.get('fs'),
+                                           offset_rm[:,1])
+                    filt_z = self.low_pass(kwargs.get('fc'),
+                                           kwargs.get('fs'),
+                                           offset_rm[:,2])
+                    self.filtered = np.column_stack((filt_x, filt_y, filt_z))
+                    accmags_f = self._get_mag({'L': self.filtered})
+                except:
+                    raise ValueError("fc and fs should be provided if you're filtering the data")
+            else:
+                accmags_f = self._get_mag({'L': offset_rm})
             velmags = self._get_mag(
-                    {'L':sensordict['L']['Gyroscope']})
+                    {'L': sensordict['L']['Gyroscope']})
+
+            """
+            accmags = self._get_mag({'L': offset_rm})
+            velmags = self._get_mag(
+                    {'L': sensordict['L']['Gyroscope']})
 
             if 'filter' in kwargs:
                 try:
@@ -244,6 +280,7 @@ class OpalV2Single(BaseProcess):
                     raise ValueError("fc and fs should be provided if you're filtering the data")
             else:
                 accmags_f = accmags
+            """
             thresholds = self._get_ind_acc_threshold(accmags_f)
 
             if rowidx is not None:
@@ -269,3 +306,132 @@ class OpalV2Single(BaseProcess):
             self.measures.velmags = velmags
             self.measures.thresholds = thresholds
             self.measures.__post_init__()
+
+class OpalV2Calib(BaseProcess):
+    def __init__(self, calib1, absolute=False, **kwargs):
+        super().__init__()
+        sensors = h5py.File(calib1)['Sensors']
+        id_list = list(sensors.keys())  # length is 1 or 2
+        ss_l = sensors[id_list[0]]['Accelerometer']
+        self.absolute = absolute
+
+        def find_window_both(arr):
+            """ This is a wrapper to use find_window on a dictionary """
+            sns = find_sns(arr)
+            return dict(zip(['p', 'n'],
+                            map(find_window,
+                                [arr, arr],
+                                list(sns.values()))))
+
+        def find_window(arr, sampnums):
+            """
+            A function to find sample numbers of THE window (7 seconds)
+            The window should have adjacent points, and the std of the points
+            should be no greater than 0.02.
+            """
+            ia = 0
+            ib = 140
+            while True:
+                # Continuity should be kept!
+                # 0.02 is experimental - could adjust later (6/22/23)
+                if all((all(np.diff(sampnums[ia:ib]) == 1),
+                        np.std(arr[sampnums[ia:ib]]) < 0.02)):
+                    break   # else unnecessary after break!
+                ia += 10
+                ib += 10
+            return sampnums[ia:ib]
+
+        def find_sns(arr):
+            """ A function to find SampleNumberS """
+            idp = np.where(np.logical_and(arr < 9.9, arr > 9.7))[0]
+            idn = np.where(np.logical_and(arr < -9.7, arr > -9.9))[0]
+            return {'p': idp, 'n': idn}
+
+        def get_gs(ndarr, absolute=self.absolute):
+            # dict; keys are 'pos' and 'neg'
+            x_w, y_w, z_w = map(find_window_both,
+                                [ndarr[:, 0], ndarr[:, 1], ndarr[:, 2]])
+            # non-g sample numbers
+            x_png = sorted(np.concatenate((y_w['p'], z_w['p'])))
+            x_nng = sorted(np.concatenate((y_w['n'], z_w['n'])))
+            y_png = sorted(np.concatenate((x_w['p'], z_w['p'])))
+            y_nng = sorted(np.concatenate((x_w['n'], z_w['n'])))
+            z_png = sorted(np.concatenate((x_w['p'], y_w['p'])))
+            z_nng = sorted(np.concatenate((x_w['n'], y_w['n'])))
+            x_non_g = sorted(np.concatenate((x_png, x_nng)))
+            y_non_g = sorted(np.concatenate((y_png, y_nng)))
+            z_non_g = sorted(np.concatenate((z_png, z_nng)))
+
+            offset = list(map(np.mean,
+                              [ss_l[x_non_g, 0],
+                               ss_l[y_non_g, 1],
+                               ss_l[z_non_g, 2]]))
+            # measured g values, without adjusting for misalignment
+            gs_orig = list(map(np.mean,
+                               [ss_l[x_w['n'], 0],
+                                ss_l[x_w['p'], 0],
+                                ss_l[y_w['n'], 1],
+                                ss_l[y_w['p'], 1],
+                                ss_l[z_w['n'], 2],
+                                ss_l[z_w['p'], 2]]))
+            # offset removed
+            arr2 = ss_l - np.array(offset)
+            if absolute:
+                xm, ym, zm = map(lambda x: np.mean(abs(x)),\
+                        [arr2[x_png, 0], arr2[y_png, 1], arr2[z_png, 2]])
+            else:
+                xm, ym, zm = map(np.mean,\
+                        [arr2[x_png, 0], arr2[y_png, 1], arr2[z_png, 2]])
+
+            gs = list(map(np.mean,
+                          [arr2[x_w['n'], 0],
+                           arr2[x_w['p'], 0],
+                           arr2[y_w['n'], 1],
+                           arr2[y_w['p'], 1],
+                           arr2[z_w['n'], 2],
+                           arr2[z_w['p'], 2]]))
+            # misalignment reflected
+            gs_boost = [gs[0]*(1+xm), gs[1]*(1+xm),
+                        gs[2]*(1+ym), gs[3]*(1+ym),
+                        gs[4]*(1+zm), gs[5]*(1+zm)]
+
+            return {'offset': offset,
+                    'misalign': [xm, ym, zm],
+                    'processed': arr2,
+                    'gs_orig': gs_orig,
+                    'gs': gs,
+                    'gs_boost': gs_boost,
+                    'samp_num': {'x': x_w, 'y': y_w, 'z': z_w}}
+
+        calib1_vals = get_gs(ss_l)
+
+        # If 2 sensors...
+        if len(id_list) == 2:
+            ss_r = sensors[id_list[1]]['Accelerometer']
+            calib2_vals = get_gs(ss_r)
+
+            self.offset = {'L': calib1_vals['offset'],
+                           'R': calib2_vals['offset']}
+            self.misalign = {'L': calib1_vals['misalign'],
+                             'R': calib2_vals['misalign']}
+            self.processed = {'L': calib1_vals['processed'],
+                              'R': calib2_vals['processed']}
+            self.original = {'L': ss_l, 'R': ss_r}
+            self.raw_gs = {'L': calib1_vals['gs_orig'],
+                           'R': calib2_vals['gs_orig']}
+            self.off_gs = {'L': calib1_vals['gs'],
+                           'R': calib2_vals['gs']}
+            self.boost_gs = {'L': calib1_vals['gs_boost'],
+                             'R': calib2_vals['gs_boost']}
+            self.samp_num = {'L': calib1_vals['samp_num'],
+                             'R': calib2_vals['samp_num']}
+        else:
+            self.offset = calib1_vals['offset']
+            self.misalign = {'L': calib1_vals['misalign'],
+                             'IDS': {'L': id_list[0]}}
+            self.original = ss_l
+            self.processed = calib1_vals['processed']
+            self.raw_gs = calib1_vals['gs_orig']
+            self.off_gs = calib1_vals['gs']
+            self.boost_gs = calib1_vals['gs_boost']
+            self.samp_num = calib1_vals['samp_num']

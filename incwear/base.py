@@ -38,6 +38,7 @@ from scipy.signal import find_peaks, detrend, firwin, lfilter
 from scipy.interpolate import interp1d, CubicSpline
 import pytz
 
+
 @dataclass
 class Processed:
     """ Storing measures derived from thresholds """
@@ -51,8 +52,9 @@ class Processed:
     # -1: under the negative threshold
     #  0: otherwise
     th_crossed: dict = field(init=False)
+
     def __post_init__(self):
-        if len(self.accmags.keys())==2:
+        if len(self.accmags.keys()) == 2:
             lpos_temp = self.accmags['lmag'] > self.thresholds['laccth']
             lneg_temp = self.accmags['lmag'] < self.thresholds['lnaccth']
             rpos_temp = self.accmags['rmag'] > self.thresholds['raccth']
@@ -67,9 +69,11 @@ class Processed:
         else:
             lpos_temp = self.accmags['umag'] > self.thresholds['accth']
             lneg_temp = self.accmags['umag'] < self.thresholds['naccth']
-            self.over_accth = {'U': lpos_temp}      # L: it's actually unidentified
+            self.over_accth = {'U': lpos_temp}  # L: it's actually unidentified
             self.under_naccth = {'U': lneg_temp}
             self.th_crossed = {'U': lpos_temp + lneg_temp * -1}
+
+
 @dataclass
 class SubjectInfo:
     """ Storing miscellaneous information """
@@ -80,6 +84,13 @@ class SubjectInfo:
     label_r: str | None
     rowidx: list | None
     recordlen: dict
+
+
+@dataclass
+class CalibFileInfo:
+    """ Storing miscellaneous information """
+    fname: list
+    fs: int
 
 class BaseProcess:
     """ Inherited by classes: axivity.Ax6, apdm.OpalV2 """
@@ -218,11 +229,13 @@ class BaseProcess:
         Parameters:
             arr: numpy.array
                 raw accelerometer data
-            offsets: list
+            offsets: numpy.array
+                [xgain, xoffset, ygain, yoffset, zgain, zoffset]
                 list of axis/orientation specific offsets
 
         Returns:
             an array - offset removed accelerometer data
+        """
         """
         xoffs = np.array([offsets[0], 0, offsets[1]])
         yoffs = np.array([offsets[2], 0, offsets[3]])
@@ -233,7 +246,18 @@ class BaseProcess:
         newx = [x + xoffs[xi] for x, xi in zip(arr[:,0], xidx)]
         newy = [y + yoffs[yi] for y, yi in zip(arr[:,1], yidx)]
         newz = [z + zoffs[zi] for z, zi in zip(arr[:,2], zidx)]
-        return np.vstack((newx, newy, newz)).T
+        """
+        """
+        newx = [(x - offsets[1])/offsets[0] for x in arr[:,0]]
+        newy = [(y - offsets[3])/offsets[2] for y in arr[:,1]]
+        newz = [(z - offsets[5])/offsets[4] for z in arr[:,2]]
+        """
+        newx = [x/offsets[0] for x in arr[:, 0]]
+        newy = [y/offsets[1] for y in arr[:, 1]]
+        newz = [z/offsets[2] for z in arr[:, 2]]
+
+        #return np.vstack((newx, newy, newz)).T
+        return np.column_stack((newx, newy, newz))
 
     @staticmethod
     def low_pass(fc, fs, arr, window='hamming'):
@@ -741,10 +765,10 @@ class BaseProcess:
         nthline = ax.axhline(y=self.measures.thresholds[labels[2]],
                 c='k', linestyle='dashed', label='negative threshold')
         ax.axhline(y=0, c='r')  # baseline
-        # If Ax6, convert from 1 deg/s to 0.017453 rad/s
-        rad_convert = 0.017453 if self._name in ['Ax6', 'Ax6Single'] else 1
+        # If Ax6 or Active, convert from 1 deg/s to 0.017453 rad/s
+        #rad_convert = 0.017453 if self._name in ['Ax6', 'Ax6Single'] else 1
         velline, = ax.plot(
-                rad_convert*self.measures.velmags[labels[0]][startidx:endidx],
+                self.measures.velmags[labels[0]][startidx:endidx],
                 c='deepskyblue', linestyle='dashdot', label='angular velocity')
         ax.legend(handles = [accline, pthline, nthline, velline])
 
@@ -789,6 +813,7 @@ class BaseProcess:
 
         plt.show()
 
+
 def get_axis_offsets(ground_gs):
     """
     A function to calculate axis/orientation specific biases
@@ -806,6 +831,29 @@ def get_axis_offsets(ground_gs):
         return list(map(lambda x: np.array([-1,1,-1,1,-1,1]) - x, ground_gs))
     else:
         return np.array([-1,1,-1,1,-1,1]) - ground_gs
+
+def get_axis_offsets_v2(ground_gs):
+
+    def calc_error(arr, idxlist):
+        """ Return: a list of three gain values """
+        # idx as a list...
+        errs = list()
+        for idx in idxlist:
+            gain = np.diff(arr[idx[0]:idx[1]])[0]/2
+            #offs = arr[idx[0]]+gain  # offset will be removed separately
+            #errs.extend([gain, offs])
+            errs.append(gain)
+        return errs
+
+    if len(ground_gs) == 2:
+        # Left and Right
+        lxyz, rxyz = map(calc_error,
+                         ground_gs,
+                         repeat([[0, 2], [2, 4], [4, 6]], 2))
+        return np.array((lxyz, rxyz))
+    else:
+        lxyz = calc_error(ground_gs, [[0, 2], [2, 4], [4, 6]])
+        return np.array(lxyz)
 
 def time_asleep(movmat, recordlen, fs, t0=0, t1_user=None):
     """
