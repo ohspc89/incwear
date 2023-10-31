@@ -148,9 +148,11 @@ class CalibProcess:
             Default is None (bcz of the warning: list is a dangerous default),
             and [0.9, 1.1] will be used.
 
-        winlen: int
-            Length of a window to measure offset in seconds.
-            Default is 5.
+        winlen: int | list | None
+            Length of a window to measure offset along each axis in seconds.
+            Default is 5 for all three axes.
+            If a single integer is given, it will assume the same window length for
+            all three axes.
 
         stdcut: float
             Cutoff of the standard deviation of the values within a window.
@@ -163,7 +165,17 @@ class CalibProcess:
             self.g_thresholds = [0.9, 1.1]
         else:
             self.g_thresholds = g_thresholds
-        self.winlen = winlen
+        if winlen is None:
+            self.winlen = {'x': 5, 'y': 5, 'z': 5}
+        elif isinstance(winlen, list):
+            if len(winlen) == 1:
+                self.winlen = {'x':5, 'y': 5, 'z': 5}
+            elif len(winlen) == 3:
+                self.winlen = {'x':winlen[0], 'y':winlen[1], 'z':winlen[2]}
+            else:
+                raise ValueError("winlen should be a list of 3, an integer, or a dictionary")
+        else:
+            self.winlen = {'x': winlen, 'y': winlen, 'z': winlen}
         self.stdcut = stdcut
 
         self.info = CalibFileInfo(
@@ -171,55 +183,85 @@ class CalibProcess:
             fs=25,  # set default to the sampling frequency of axivity Ax6
             timezone='')
 
-    def find_window_both(self, arr):
+    def find_window_both(self, arr, axis, winlen=None):
         """ This is a wrapper to use find_window with a dict obj """
         thrs = self.g_thresholds
         sns = self.find_sns(arr, thrs[0], thrs[1])
+        # If axis value is not provided, or not one of 'x', 'y', or 'z',
+        # raise an error
+        if any((axis is None, axis.lower() not in ['x', 'y', 'z'])):
+            raise ValueError("axis value incorrect - pick one: 'x', 'y', 'z'")
         # start with the initial threshold values.
+        if winlen is None:
+            winlen = self.winlen[axis.lower()]
+        print(f"winlen, {axis.upper()}-axis: {winlen}")
         pwin, nwin = map(self.find_window,
                          [arr, arr],
-                         list(sns.values()))
-        if any((pwin is None, nwin is None)):
-            print(f"No window found to calculate offset with current\n\
-                    threshold values: {thrs[0]:.2f}, {thrs[1]:.2f}")
+                         list(sns.values()),
+                         [winlen, winlen])
+        if all((pwin is not None, nwin is not None)):
+            # update the winlen...
+            self.winlen[axis.lower()] = winlen
+            return dict(zip(['p', 'n'], [pwin, nwin])) # p: pos; n: neg
+        else:
+            print(f"""No window found to calculate offset with
+    current threshold values: {thrs[0]:.2f}, {thrs[1]:.2f}""")
             thrs_low = thrs[0]
             thrs_high = thrs[1]
-            while any((pwin is None, nwin is None)):
+            while all((thrs_low > 0.75, thrs_high < 1.25)):
                 thrs_low = thrs_low - 0.05
                 thrs_high = thrs_high + 0.05
-                print(f"Searching windows with new thresholds: \n\
-                        {thrs_low:.2f}, {thrs_high:.2f}")
+                print(f"""Searching windows with new thresholds:
+    {thrs_low:.2f}, {thrs_high:.2f}
+                        """)
                 sns = self.find_sns(arr, thrs_low, thrs_high)
+                print(f"winlen: {winlen}")
                 pwin, nwin = map(self.find_window,
                                  [arr, arr],
-                                 list(sns.values()))
-        return dict(zip(['p', 'n'], [pwin, nwin]))  # p: positive; n: negative
+                                 list(sns.values()),
+                                 [winlen, winlen])
+            if any((pwin is None, nwin is None)):
+                # If you're still not satisfied shrink the window length by 1 sec.
+                print(f"""Windows were not found within the four attempts.
+    A new search begins with the reduced window length:
+    {winlen} - 1 = {int(winlen - 1)}
+                """)
+                new_winlen = int(winlen - 1)
+                # recurse with the new winlen value
+                return self.find_window_both(arr, axis, winlen=new_winlen)
+            else:
+                return dict(zip(['p', 'n'], [pwin, nwin]))  # p: positive; n: negative
 
-    def find_window(self, arr, sampnums):
+    def find_window(self, arr, sampnums, winlen=None):
         """
-        A function to find sample numbers of THE window (length = winlen)
+        A function to find sample numbers of THE window (length = winlen).
         The window should have adjacent points, and the std of the points
         should be no greater than a cut-off for std (default: 0.02).
 
         Parameters
         ----------
-        arr: numpy array
+        arr: NumPy array
              An array of measured gravitational acceleration along an axis.
 
-        sampnums: numpy array
+        sampnums: NumPy array
              An array of sample numbers corresponding to the periods
              when one of the three (X, Y, or Z) axes was measuring +/-1g.
 
+        winlen: int | None
+            Length of the window
+
         Returns
         -------
-        x: numpy array | None
+        x: NumPy array | None
              An array of sample numbers. The difference of the two adjacent
              array elements will ALWAYS be one, and the standard deviation
              of the entire array will be less than a cut-off (stdcut).
              If you don't find any such array, return None.
         """
         ia = 0
-        ib = self.info.fs * self.winlen
+        if winlen is None:
+            winlen = self.winlen
+        ib = self.info.fs * winlen
         # (8/7/23) ib should not be greater than the end of sampnums...
         while ib < len(sampnums):
             # Continuity should be kept!
@@ -239,7 +281,7 @@ class CalibProcess:
 
         Paramters
         ---------
-        arr: numpy array
+        arr: NumPy array
              An array of measured gravitational acceleration along an axis.
 
         thr_low: float
@@ -262,9 +304,12 @@ class CalibProcess:
         """
         A function to calculate gain, offset, andmisalignment
 
+        Sometimes calibration is not done properly. If so,
+        NA values should be filled...
+
         Parameters
         ----------
-        ndarr: numpy ndarray
+        ndarr: NumPy ndarray
                Raw measurement of +/-1g along the measurement axis.
 
         Returns
@@ -280,7 +325,8 @@ class CalibProcess:
         """
         absolute = self.absolute
         x_w, y_w, z_w = map(self.find_window_both,
-                            [ndarr[:, 0], ndarr[:, 1], ndarr[:, 2]])
+                            [ndarr[:, 0], ndarr[:, 1], ndarr[:, 2]],
+                            ['x', 'y', 'z'])
         # non-g sample numbers
         # For example, x_P(ositive)N(on)G is the concatenated regions
         # where y or z axis was measuring positive g (1 g)

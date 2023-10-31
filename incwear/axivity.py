@@ -179,10 +179,41 @@ class Ax6(BaseProcess):
         fc: int
             cut-off frequency for low-pass filtering
         """
+        ALLOWED_EXTENSIONS = ['cwa', 'gz']
         super().__init__(Lfilename=Lfilename, Rfilename=Rfilename)
-        reader = ReadCwa()
-        l_skdh = reader.predict(Lfilename)
-        r_skdh = reader.predict(Rfilename)
+        # Both files should be .cwa or .tsv.gz
+        extensions = [Lfilename.split('.')[-1], Rfilename.split('.')[-1]]
+        # If any of the file extension is not 'cwa' or 'gz'
+        if any([x not in ALLOWED_EXTENSIONS for x in extensions]):
+            raise ValueError(
+                    f"Allowed extension types are: "
+                    f"{ALLOWED_EXTENSIONS}."
+                    f"Provided file extensions are: "
+                    f"{extensions}"
+                    )
+        # If two file extensions are different
+        if extensions[0] != extensions[1]:
+            raise ValueError(
+                    f"Both filenames should have the same extension, "
+                    f"'.cwa' or '.tsv.gz'. "
+                    f"Provided names are {Lfilename}, "
+                    f"and {Rfilename}"
+                    )
+        if Lfilename.endswith('tsv.gz'):
+            l_tsv = np.loadtxt(Lfilename, delimiter='\t')
+            r_tsv = np.loadtxt(Rfilename, delimiter='\t')
+            l_skdh = {'accel': l_tsv[:, 0:3],
+                    'gyro': l_tsv[:, 3:6],
+                    'time': l_tsv[:, 6]}
+            r_skdh = {'accel': r_tsv[:, 0:3],
+                    'gyro': r_tsv[:, 3:6],
+                    'time': r_tsv[:, 6]}
+        # If not tsv.gz, then cwa.
+        else:
+            reader = ReadCwa()
+            l_skdh = reader.predict(Lfilename)
+            r_skdh = reader.predict(Rfilename)
+
         self.info.timezone = study_tz   # prioritize this step
 
         # Remove offset from the measurements
