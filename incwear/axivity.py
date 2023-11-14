@@ -202,6 +202,7 @@ class Ax6(BaseProcess):
         if Lfilename.endswith('tsv.gz'):
             l_tsv = np.loadtxt(Lfilename, delimiter='\t')
             r_tsv = np.loadtxt(Rfilename, delimiter='\t')
+            # This is dictated by the conversion... or is it too risky?
             l_skdh = {'accel': l_tsv[:, 0:3],
                     'gyro': l_tsv[:, 3:6],
                     'time': l_tsv[:, 6]}
@@ -243,18 +244,24 @@ class Ax6(BaseProcess):
 
         if 'intp_option' in kwargs:
             try:
-                intp_acc = map(self.resample_to,
-                               [l_skdh['time'], r_skdh['time']],
-                               offset_rm,
-                               [kwargs.get('intp_option'),
-                                kwargs.get('intp_option')],
-                               [kwargs.get('re_fs'), kwargs.get('re_fs')])
-                intp_vel = map(self.resample_to,
-                               [l_skdh['time'], r_skdh['time']],
-                               [l_skdh['gyro'], r_skdh['gyro']],
-                               [kwargs.get('intp_option'),
-                                kwargs.get('intp_option')],
-                               [kwargs.get('re_fs'), kwargs.get('re_fs')])
+                # resample_to(timearr, arr, intp_option, re_fs)
+                # (11/9/23) Use of 'elapsed_time' was suggested to follow
+                # BIDS. If so, even when working with cwa files you better
+                # interpolate using the 'elapsed_time'
+                l_timevec = l_skdh['time'] - l_skdh['time'][0]
+                r_timevec = r_skdh['time'] - r_skdh['time'][0]
+                intp_acc = map(lambda p: self.resample_to(p[0],
+                                                          p[1],
+                                                          kwargs.get('intp_option'),
+                                                          kwargs.get('re_fs')),
+                               zip([l_timevec, r_timevec],
+                                   offset_rm))
+                intp_vel = map(lambda q: self.resample_to(q[0],
+                                                          q[1],
+                                                          kwargs.get('intp_option'),
+                                                          kwargs.get('re_fs')),
+                               zip([l_timevec, r_timevec],
+                                   [l_skdh['gyro'], r_skdh['gyro']]))
                 accmags = self._get_mag(
                         {x: 9.80665*y for x, y in zip(['L', 'R'], intp_acc)},
                         det_option=det_option)
@@ -276,15 +283,15 @@ class Ax6(BaseProcess):
 
         if 'filter' in kwargs:
             try:
-                accmags_f = {
-                        # cut-off (fc), hamming window
-                        # first-order FIR low-pass
-                        'lmag': self.low_pass(kwargs.get('fc'),
-                                              kwargs.get('fs'),
-                                              accmags['lmag']),
-                        'rmag': self.low_pass(kwargs.get('fc'),
-                                              kwargs.get('fs'),
-                                              accmags['rmag'])}
+                # cut-off (fc), hamming window
+                # first-order FIR low-pass
+                accmags_f = dict(zip(['lmag', 'rmag'],
+                                     list(map(lambda p: self.low_pass(
+                                         kwargs.get('fc'),
+                                         kwargs.get('fs'),
+                                         p),
+                                              [accmags['lmag'],
+                                               accmags['rmag']]))))
             except ValueError:
                 print("Missing: fc and fs for filtering the data")
         else:
@@ -321,6 +328,8 @@ class Ax6Calib(CalibProcess):
     def __init__(self, calib1, absolute=False, **kwargs):
         super().__init__()  # thresholds = [0.9, 1,1]
         # reader = ReadCwa()
+        # Print the file name...
+        print(calib1)
         with CwaData(calib1) as cwafile:
             temp = cwafile.get_sample_values()
         ss_l = temp[:, [1, 2, 3]]

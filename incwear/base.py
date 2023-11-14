@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 import re
 from datetime import datetime, timedelta, timezone
 from itertools import chain, repeat
+import warnings
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -169,13 +170,13 @@ class CalibProcess:
             self.winlen = {'x': 5, 'y': 5, 'z': 5}
         elif isinstance(winlen, list):
             if len(winlen) == 1:
-                self.winlen = {'x':5, 'y': 5, 'z': 5}
+                self.winlen = {key: winlen[0] for key in ['x', 'y', 'z']}
             elif len(winlen) == 3:
-                self.winlen = {'x':winlen[0], 'y':winlen[1], 'z':winlen[2]}
+                self.winlen = dict(zip(['x', 'y', 'z'], winlen))
             else:
-                raise ValueError("winlen should be a list of 3, an integer, or a dictionary")
+                raise ValueError("winlen should be a list of 3, or an integer")
         else:
-            self.winlen = {'x': winlen, 'y': winlen, 'z': winlen}
+            self.winlen = {key: winlen for key in ['x', 'y', 'z']}
         self.stdcut = stdcut
 
         self.info = CalibFileInfo(
@@ -195,6 +196,9 @@ class CalibProcess:
         if winlen is None:
             winlen = self.winlen[axis.lower()]
         print(f"winlen, {axis.upper()}-axis: {winlen}")
+        if winlen < 1:
+            warnings.warn(f"winlen is shorter than 1s ({winlen}s) ",
+                          f"Calibration output will be NaNs.")
         pwin, nwin = map(self.find_window,
                          [arr, arr],
                          list(sns.values()),
@@ -202,35 +206,48 @@ class CalibProcess:
         if all((pwin is not None, nwin is not None)):
             # update the winlen...
             self.winlen[axis.lower()] = winlen
-            return dict(zip(['p', 'n'], [pwin, nwin])) # p: pos; n: neg
-        else:
-            print(f"""No window found to calculate offset with
-    current threshold values: {thrs[0]:.2f}, {thrs[1]:.2f}""")
-            thrs_low = thrs[0]
-            thrs_high = thrs[1]
-            while all((thrs_low > 0.75, thrs_high < 1.25)):
-                thrs_low = thrs_low - 0.05
-                thrs_high = thrs_high + 0.05
-                print(f"""Searching windows with new thresholds:
-    {thrs_low:.2f}, {thrs_high:.2f}
-                        """)
-                sns = self.find_sns(arr, thrs_low, thrs_high)
-                print(f"winlen: {winlen}")
-                pwin, nwin = map(self.find_window,
-                                 [arr, arr],
-                                 list(sns.values()),
-                                 [winlen, winlen])
-            if any((pwin is None, nwin is None)):
-                # If you're still not satisfied shrink the window length by 1 sec.
-                print(f"""Windows were not found within the four attempts.
-    A new search begins with the reduced window length:
-    {winlen} - 1 = {int(winlen - 1)}
-                """)
-                new_winlen = int(winlen - 1)
-                # recurse with the new winlen value
-                return self.find_window_both(arr, axis, winlen=new_winlen)
-            else:
-                return dict(zip(['p', 'n'], [pwin, nwin]))  # p: positive; n: negative
+            return dict(zip(['p', 'n'], [pwin, nwin]))  # p: pos; n: neg
+
+        print(f"""No window found to calculate offset with 
+                  current threshold values: 
+                  {thrs[0]:.2f}, {thrs[1]:.2f}""")
+        thrs_low = thrs[0]
+        thrs_high = thrs[1]
+        while all((thrs_low > 0.75, thrs_high < 1.25)):
+            thrs_low = thrs_low - 0.05
+            thrs_high = thrs_high + 0.05
+            print(f"""Searching windows with new thresholds:
+{thrs_low:.2f}, {thrs_high:.2f}
+                    """)
+            sns = self.find_sns(arr, thrs_low, thrs_high)
+            print(f"winlen: {winlen}")
+            pwin, nwin = map(self.find_window,
+                             [arr, arr],
+                             list(sns.values()),
+                             [winlen, winlen])
+            # Should break the loop if pwin and nwin are all good
+            if all((pwin is not None, nwin is not None)):
+                break
+        if any((pwin is None, nwin is None)):
+            # If you're still not satisfied shrink the window length by 1s.
+            print(f"""Windows were not found within the four attempts.
+A new search begins with the reduced window length:
+{winlen} - 1 = {int(winlen - 1)}
+            """)
+            new_winlen = int(winlen - 1)
+            # If new_win is 0, stop and return an empty numpy array
+            # for the missed measurement.
+            if new_winlen < 1:
+                if pwin is None:
+                    pwin = np.empty(0, int)
+                if nwin is None:
+                    nwin = np.empty(0, int)
+                return dict(zip(['p', 'n'], [pwin, nwin]))
+
+            # Recursion
+            return self.find_window_both(arr, axis, winlen=new_winlen)
+
+        return dict(zip(['p', 'n'], [pwin, nwin]))  # positive & negative
 
     def find_window(self, arr, sampnums, winlen=None):
         """
@@ -1146,11 +1163,12 @@ class BaseProcess:
                         ax.plot(hull[j]-startidx,
                                 self.measures.accmags[labels[0]][hull[j]],
                                 c='g', linewidth=2)
-        if title is None:
-            title = f"{duration}s from "\
-                    f"{(self.info.record_times[side][0] + timedelta(seconds=time_passed)).ctime()}"\
-                    f" UTC\n(recording ended at {self.info.record_times[side][1].ctime()} UTC)"
-        ax.set_title(title)
+        # (11/9/23) Shuttinf off this feature 
+        #if title is None:
+        #    title = f"{duration}s from "\
+                #            f"{(self.info.record_times[side][0] + timedelta(seconds=time_passed)).ctime()}"\
+                #    f" UTC\n(recording ended at {self.info.record_times[side][1].ctime()} UTC)"
+        #ax.set_title(title)
         ax.set_xlabel("Time (sec)")
         ax.set_ylabel("Acc. magnitude (m/s^2)")
         # x tick labels to indicate "seconds"

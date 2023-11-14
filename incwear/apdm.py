@@ -14,17 +14,19 @@ class OpalV2(BaseProcess):
     A class that will store (preliminarily) processed data
         recorded in the OPAL V2sensors
     """
-    def __init__(self, filename, in_en_dts, label_r,
+    def __init__(self, filename, label_r, in_en_dts=None,
                  offset=None, gs=None, thr_method='orig', **kwargs):
         """
         Parameters
         ----------
         filename: str
             *.h5 data file's name
-        in_en_dts: list
-            list of datetime objects
         label_r: str
             string that identifies the "r"ight side
+        in_en_dts: list | None
+            list of datetime objects to trim the full recording
+            If None, then the entire recording will be used for
+            further processing
         offset: dict(list)
             a dictionary whose items are left and right
             sensors' axis misalignment error
@@ -43,6 +45,11 @@ class OpalV2(BaseProcess):
         super().__init__(filename=filename,
                          in_en_dts=in_en_dts,
                          label_r=label_r)
+        # Update fs!
+        if 'fs' in kwargs:
+            self.info.fs = kwargs.get('fs')
+        else:
+            self.info.fs = 20       # default: 20Hz
 
         with h5py.File(filename, 'r') as h5file:
             # Sensors has TWO members.
@@ -56,7 +63,7 @@ class OpalV2(BaseProcess):
             if len(sids) == 0:
                 raise SensorMissingError("No sensor recording exists")
 
-            # We need to find out which sensor was attached to which leg.
+            # We need to find out which sensor was attached to which leg
             # First, we read the label of the second Case ID (sensorlabel)
             sensorlabel = sensors[sids[1]]\
                     ['Configuration'].attrs["Label 0"].decode()
@@ -134,10 +141,6 @@ class OpalV2(BaseProcess):
 
             self.info.fname = [filename]
             self.info.record_times = {'L': rts, 'R': rts}
-            if 'fs' in kwargs:
-                self.info.fs = kwargs.get('fs')
-            else:
-                self.info.fs = 20   # default: 20 S/s
             self.info.label_r = label_r
             self.info.rowidx = rowidx
             self.info.recordlen = {'L': accmags_f['lmag'].shape[0],
@@ -161,6 +164,12 @@ class OpalV1(BaseProcess):
             a list of sensor id's used to measure left leg movement
         """
         super().__init__(filename=filename, in_en_dts=in_en_dts)
+
+        # Update fs!
+        if 'fs' in kwargs:
+            self.info.fs = kwargs.get('fs')
+        else:
+            self.info.fs = 20       # default: 20Hz
 
         with h5py.File(filename, 'r') as sensors:
             # Opal V1 does not have 'R' or 'L' label...
@@ -186,15 +195,19 @@ class OpalV1(BaseProcess):
             try:
                 indexed1 = np.where(sensordict['L']['ButtonStatus'][:]==1)[0][0]
                 print('Left Button Pressed: ', indexed1)
-                rowidx = self._prep_row_idx(sensordict['L'], in_en_dts)
+                rowidx = self._prep_row_idx(sensordict['L']['Time'],
+                                            in_en_dts,
+                                            btnstatus=indexed1)
             except:
                 try:
                     indexed1 = np.where(sensordict['R']['ButtonStatus'][:]==1)[0][0]
                     print('Right Button Pressed: ', indexed1)
                 except:
-                    indexed1 = [0][0]
+                    indexed1 = 0
                     print('No Button Press ', indexed1)
-                rowidx = self._prep_row_idx(sensordict['R'], in_en_dts)
+                rowidx = self._prep_row_idx(sensordict['R']['Time'],
+                                            in_en_dts,
+                                            btnstatus=indexed1)
 
             print('Range of the data points: ', rowidx[0], rowidx[-1])
 
@@ -234,7 +247,6 @@ class OpalV1(BaseProcess):
 
             self.info.fname = [filename]
             self.info.record_times = {'L': rts, 'R': rts}
-            self.info.fs = 20
             self.info.label_r = 'N/A'
             self.info.rowidx = rowidx
             self.info.recordlen = {'L': accmags_f['lmag'].shape[0],
@@ -248,6 +260,11 @@ class OpalV2Single(BaseProcess):
     """ Single Opal V2 Sensor """
     def __init__(self, filename, in_en_dts, offset=None, gs=None, **kwargs):
         super().__init__(filename=filename, in_en_dts=in_en_dts)
+
+        if 'fs' in kwargs:
+            self.info.fs = kwargs.get('fs')
+        else:
+            self.info.fs = 20       # default: 20Hz
 
         with h5py.File(filename, 'r') as h5file:
             sensors = h5file['Sensors']
@@ -318,10 +335,6 @@ class OpalV2Single(BaseProcess):
 
             self.info.fname = filename
             self.info.record_times = {'U': rts}
-            if 'fs' in kwargs:
-                self.info.fs = kwargs.get('fs')
-            else:
-                self.info.fs = 20   # default: 20 S/s
             self.info.label_r = 'N/A'
             self.info.rowidx = rowidx
             self.info.recordlen = {'U': accmags_f['umag'].shape[0]}
