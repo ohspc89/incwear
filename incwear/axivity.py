@@ -203,12 +203,13 @@ class Ax6(BaseProcess):
             l_tsv = np.loadtxt(Lfilename, delimiter='\t')
             r_tsv = np.loadtxt(Rfilename, delimiter='\t')
             # This is dictated by the conversion... or is it too risky?
-            l_skdh = {'accel': l_tsv[:, 0:3],
-                    'gyro': l_tsv[:, 3:6],
-                    'time': l_tsv[:, 6]}
-            r_skdh = {'accel': r_tsv[:, 0:3],
-                    'gyro': r_tsv[:, 3:6],
-                    'time': r_tsv[:, 6]}
+            # elapsed_time | acc_x | acc_y | acc_z | gyro_x | gyro_y | gyro_z
+            l_skdh = {'accel': l_tsv[:, 1:4],
+                    'gyro': l_tsv[:, 4:7],
+                    'time': l_tsv[:, 0]}
+            r_skdh = {'accel': r_tsv[:, 1:4],
+                    'gyro': r_tsv[:, 4:7],
+                    'time': r_tsv[:, 0]}
         # If not tsv.gz, then cwa.
         else:
             reader = ReadCwa()
@@ -327,11 +328,11 @@ class Ax6Calib(CalibProcess):
     """
     def __init__(self, calib1, absolute=False, **kwargs):
         super().__init__()  # thresholds = [0.9, 1,1]
-        # reader = ReadCwa()
-        # Print the file name...
-        print(calib1)
-        with CwaData(calib1) as cwafile:
-            temp = cwafile.get_sample_values()
+        if calib1.endswith('tsv.gz'):
+            temp = np.loadtxt(calib1, delimiter='\t')
+        else:
+            with CwaData(calib1) as cwafile:
+                temp = cwafile.get_sample_values()
         ss_l = temp[:, [1, 2, 3]]
         self.absolute = absolute
         self.info.fs = 25
@@ -343,9 +344,15 @@ class Ax6Calib(CalibProcess):
         calib1_vals = self.get_gs(ss_l)
 
         if 'calib2' in kwargs:
-            self.info.fname = [calib1, kwargs.get('calib2')]
-            with CwaData(kwargs.get('calib2')) as cwafile2:
-                temp2 = cwafile2.get_sample_values()
+            print("""TWO (2) calibration files provided - the first file will be 
+            set as the left sensor calibration file""")
+            calib2 = kwargs.get('calib2')
+            self.info.fname = [calib1, calib2]
+            if calib2.endswith('tsv.gz'):
+                temp2 = np.loadtxt(calib2, delimiter='\t')
+            else:
+                with CwaData(calib2) as cwafile2:
+                    temp2 = cwafile2.get_sample_values()
             # ss_r = reader.predict(kwargs.get('calib2'))['accel']
             ss_r = temp2[:, [1, 2, 3]]
             calib2_vals = self.get_gs(ss_r)

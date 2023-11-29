@@ -196,9 +196,6 @@ class CalibProcess:
         if winlen is None:
             winlen = self.winlen[axis.lower()]
         print(f"winlen, {axis.upper()}-axis: {winlen}")
-        if winlen < 1:
-            warnings.warn(f"winlen is shorter than 1s ({winlen}s) ",
-                          f"Calibration output will be NaNs.")
         pwin, nwin = map(self.find_window,
                          [arr, arr],
                          list(sns.values()),
@@ -239,8 +236,14 @@ A new search begins with the reduced window length:
             # for the missed measurement.
             if new_winlen < 1:
                 if pwin is None:
+                    warnings.warn(f"winlen is shorter than 1s ({winlen}s). ",
+                                  f"Calibration output for {axis.lower()} axis: ",
+                                  "positive will be NaNs.")
                     pwin = np.empty(0, int)
                 if nwin is None:
+                    warnings.warn(f"winlen is shorter than 1s ({winlen}s). ",
+                                  f"Calibration output for {axis.lower()} axis: ",
+                                  "negative will be NaNs.")
                     nwin = np.empty(0, int)
                 return dict(zip(['p', 'n'], [pwin, nwin]))
 
