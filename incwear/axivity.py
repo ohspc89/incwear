@@ -6,8 +6,10 @@ Script prepared to process Ax6 sensor data by Jinseok Oh, Ph.D.
 from datetime import datetime
 import os
 from itertools import repeat
+# import gzip   # gzip no longer needed, as tsv, not tsv.gz is read
 import numpy as np
 import pandas as pd
+from pyarrow import csv
 from skdh.io import ReadCwa
 from openmovement.load import CwaData
 from openmovement.process import OmConvert
@@ -179,11 +181,11 @@ class Ax6(BaseProcess):
         fc: int
             cut-off frequency for low-pass filtering
         """
-        ALLOWED_EXTENSIONS = ['cwa', 'gz']
+        ALLOWED_EXTENSIONS = ['cwa', 'tsv']
         super().__init__(Lfilename=Lfilename, Rfilename=Rfilename)
-        # Both files should be .cwa or .tsv.gz
+        # Both files should be .cwa or .tsv
         extensions = [Lfilename.split('.')[-1], Rfilename.split('.')[-1]]
-        # If any of the file extension is not 'cwa' or 'gz'
+        # If any of the file extension is not 'cwa' or 'tsv'
         if any([x not in ALLOWED_EXTENSIONS for x in extensions]):
             raise ValueError(
                     f"Allowed extension types are: "
@@ -195,13 +197,27 @@ class Ax6(BaseProcess):
         if extensions[0] != extensions[1]:
             raise ValueError(
                     f"Both filenames should have the same extension, "
-                    f"'.cwa' or '.tsv.gz'. "
+                    f"'.cwa' or '.tsv'. "
                     f"Provided names are {Lfilename}, "
                     f"and {Rfilename}"
                     )
-        if Lfilename.endswith('tsv.gz'):
-            l_tsv = np.loadtxt(Lfilename, delimiter='\t')
-            r_tsv = np.loadtxt(Rfilename, delimiter='\t')
+        if Lfilename.endswith('tsv'):
+            # pyarrow.csv.read_csv: takes 1/3 of time compared to np.loadtxt
+            readOptions = csv.ReadOptions(column_names=[],
+                                          autogenerate_column_names=True)
+            parseOptions = csv.ParseOptions(delimiter='\t')
+            with open(Lfilename, 'rb') as f1:
+                l_tsv = np.asarray(csv.read_csv(f1,
+                                                read_options=readOptions,
+                                                parse_options=parseOptions))
+            f1.close()
+            with open(Rfilename, 'rb') as f2:
+                r_tsv = np.asarray(csv.read_csv(f2,
+                                                read_options=readOptions,
+                                                parse_options=parseOptions))
+            f2.close()
+            #l_tsv = np.loadtxt(Lfilename, delimiter='\t')
+            #r_tsv = np.loadtxt(Rfilename, delimiter='\t')
             # This is dictated by the conversion... or is it too risky?
             # elapsed_time | acc_x | acc_y | acc_z | gyro_x | gyro_y | gyro_z
             l_skdh = {'accel': l_tsv[:, 1:4],
@@ -210,7 +226,7 @@ class Ax6(BaseProcess):
             r_skdh = {'accel': r_tsv[:, 1:4],
                     'gyro': r_tsv[:, 4:7],
                     'time': r_tsv[:, 0]}
-        # If not tsv.gz, then cwa.
+        # If not tsv, then cwa.
         else:
             reader = ReadCwa()
             l_skdh = reader.predict(Lfilename)
@@ -328,7 +344,7 @@ class Ax6Calib(CalibProcess):
     """
     def __init__(self, calib1, absolute=False, **kwargs):
         super().__init__()  # thresholds = [0.9, 1,1]
-        if calib1.endswith('tsv.gz'):
+        if calib1.endswith('tsv'):
             temp = np.loadtxt(calib1, delimiter='\t')
         else:
             with CwaData(calib1) as cwafile:
@@ -348,7 +364,7 @@ class Ax6Calib(CalibProcess):
             set as the left sensor calibration file""")
             calib2 = kwargs.get('calib2')
             self.info.fname = [calib1, calib2]
-            if calib2.endswith('tsv.gz'):
+            if calib2.endswith('tsv'):
                 temp2 = np.loadtxt(calib2, delimiter='\t')
             else:
                 with CwaData(calib2) as cwafile2:

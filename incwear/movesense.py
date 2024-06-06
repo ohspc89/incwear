@@ -6,8 +6,8 @@ from base import (BaseProcess, CalibProcess, cycle_filt, time_asleep,
 
 # Movesense Active sensors have a buffer of 4 data points.
 # We need a function to 'debuffer'
-def unbuffer(arr, keyword):
-    buff = [arr[i]['imu'][keyword] for i in range(len(arr))]
+def unbuffer(arr, keyword, rec_type='imu'):
+    buff = [arr[i][rec_type][keyword] for i in range(len(arr))]
     N = len(buff)
     buffN = 4
     X = [buff[i][j]['x'] for i in range(N) for j in range(buffN)]
@@ -21,7 +21,7 @@ class Active(BaseProcess):
     - developmental stage / single sensor only
     """
     def __init__(self, filename, study_tz, offset=None, gs=None,
-                 **kwargs):
+                 rec_type='imu', **kwargs):
         super().__init__()
         self.info.timezone = study_tz
         f = open(filename)
@@ -65,7 +65,7 @@ class Active(BaseProcess):
         dt_text = filename.split('/')[-1].split('.json')[0].split('Z_')[0]
         dt_obj = datetime.strptime(dt_text, '%Y%m%dT%H%M%S')
         # timestamp
-        ts = [data['data'][i]['imu']['Timestamp']
+        ts = [data['data'][i][rec_type]['Timestamp']
               for i in range(len(data['data']))]
 
         rts = {'U': [dt_obj+timedelta(seconds=int(ts[0])/1e6),
@@ -89,23 +89,24 @@ class ActiveCalib(CalibProcess):
     This is a class that takes calibration json file(s) and stores
     offset values.
     """
-    def __init__(self, calib1, g_thresholds=[9.5, 10.1], **kwargs):
+    def __init__(self, calib1, g_thresholds=[9.5, 10.1],
+                 rec_type='imu', **kwargs):
         super().__init__()
         self.g_thresholds = g_thresholds
         self.info.fs = 52
         f = open(calib1)
         data = json.load(f)
 
-        tempaccmat = unbuffer(data['data'], 'ArrayAcc')
+        tempaccmat = unbuffer(data['data'], 'ArrayAcc', rec_type=rec_type)
 
-        calib1_vals = get_gs(tempaccmat)
+        calib1_vals = self.get_gs(tempaccmat)
 
         if 'calib2' in kwargs:
             self.info.fname = [calib1, kwargs.get('calib2')]
             f2 = open(kwargs.get('calib2'))
             data2 = json.load(f2)
-            tempaccmat2 = unbuffer(data2['data'], 'ArrayAcc')
-            calib2_vals = get_gs(tempaccmat2)
+            tempaccmat2 = unbuffer(data2['data'], 'ArrayAcc', rec_type=rec_type)
+            calib2_vals = self.get_gs(tempaccmat2)
 
             self.offset = {'L': calib1_vals['offset'],
                            'R': calib2_vals['offset']}

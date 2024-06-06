@@ -17,9 +17,10 @@ import warnings
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from scipy.signal import find_peaks, firwin, lfilter
+from scipy.signal import find_peaks, firwin, lfilter, filtfilt
 from scipy.interpolate import interp1d, CubicSpline
 import pytz
+from EntropyHub import SampEn, FuzzEn
 
 
 @dataclass
@@ -1038,6 +1039,116 @@ class BaseProcess:
 
         return movidx_nz2
 
+    def alt_kicks(self, height=0.4, distance=4, width=2,
+                  thresholds=[0.25, 0.25],
+                  prominence=None, smooth=False, window=None,
+                  fs=None, fc=None):
+        # parameters are likely to be changed...
+        # currently set based on an adult data
+        left_w = self.measures.velmags['lmag']
+        right_w = self.measures.velmags['rmag']
+        if smooth:
+            if window is None:
+                window = 'hamming'
+            if fs is None:
+                fs = 20     # default to OPAL, 20Hz
+            if fc is None:
+                fc = int(fs / 3)
+            elif type(fc) == int:
+                h = firwin(2, cutoff=fc, window=window, fs=fs)
+            elif type(fc) == list:
+                h = firwin(2, cutoff=fc, window=window, fs=fs, pass_zero=False)
+            left_w = filtfilt(h, 1, left_w)
+            right_w = filtfilt(h, 1, right_w)
+
+        if prominence is not None:
+            lpkloc, _ = find_peaks(left_w,
+                                   height=height,
+                                   distance=distance,
+                                   prominence=prominence)
+            rpkloc, _ = find_peaks(right_w,
+                                   height=height,
+                                   distance=distance,
+                                   prominence=prominence)
+        else:
+            lpkloc, _ = find_peaks(left_w,
+                               height=height,
+                               distance=distance,
+                               width=width)
+            rpkloc, _ = find_peaks(right_w,
+                               height=height,
+                               distance=distance,
+                               width=width)
+        # What about don't use all the peaks, but use within the range of
+        # mean +/-1 std?
+        #np.mean(lpkinfo['peak_heights'])
+        # Find angular velocity magnitude 'windows'
+        def find_window(arr, pkloc, threshold):
+            pkentry = np.zeros((len(pkloc), 3))
+            for i, pk in enumerate(pkloc):
+                # left limit
+                # 30 = 1.5 * 20 (samples), so 1.5 seconds apart
+                # No, going back to one second...
+                if (i == 0) or (pk - pkloc[i-1] > 20):
+                    lidx = 1
+                    # Let's make sure that things don't go more than 1.5 seconds...
+                    while all((pk-lidx > 0, lidx < 20)):
+                        if lidx == 19:
+                            # if you almost reached the step maximum
+                            # just roll back to the local minimum
+                            print(f'lidx almost reached the end. Current pk: {pk}')
+                            lidx = lidx - np.argmin(arr[pk-lidx:pk])
+                            if lidx == 0:
+                                lidx = 5
+                            print(f'newly found lidx: {lidx}')
+                            break
+                        # Increasing the threshold: 0.1 -> 0.16 (5/6/2024)
+                        # Threshold provided externally (5/24/2024)
+                        if arr[pk-lidx] > threshold:
+                            lidx += 1
+                        else:
+                            break
+                    pkentry[i, 0:2] = [pk-lidx, pk]
+                else:
+                    leftend = np.argmin(arr[pkloc[i-1]:pk])
+                    pkentry[i, 0:2] = [pkloc[i-1]+leftend, pk]
+                # Right limit
+                if (i == len(pkloc)-1) or (pkloc[i+1] - pk > 20):
+                    ridx = 1
+                    while all((ridx < 20, pk+ridx < len(arr)-1)):
+                        # same for the right side
+                        if ridx == 19:
+                            ridx = np.argmin(arr[pk:pk+ridx])
+                            print(f'ridx almost reached the end. Current pk: {pk}')
+                            if ridx == 0:
+                                ridx = 5
+                            print(f'newly found ridx: {ridx}')
+                            break
+                        # [NO] Increasing the threshold: 0.1 -> 0.16
+                        # Threshold externally given
+                        if arr[pk+ridx] > threshold:
+                            ridx += 1
+                        else:
+                            break
+                    pkentry[i, 2] = pk + ridx
+                else:
+                    rightend = np.argmin(arr[pk:pkloc[i+1]])
+                    pkentry[i, 2] = pk + rightend
+
+                # Remove windows that are 'not good - shorter than 4 samples
+                if i != 0 and pkentry[i, 2] - pkentry[i, 0] <= 3:
+                    pkentry[i-1, 2] = pkentry[i, 2]
+                    pkentry[i, ] = [0, 0, 0]
+
+            return pkentry[np.nonzero(pkentry[:, 0])[0], ]
+
+        left_wins, right_wins = map(find_window,
+                                    [left_w, right_w],
+                                    [lpkloc, rpkloc],
+                                    thresholds)
+
+        return {'left': left_wins, 'right': right_wins}
+
     def acc_per_mov(self, side='L', movmat=None):
         """
         A function to calculate average acceleration per movement
@@ -1472,6 +1583,45 @@ def convert_to_utc(datetime_obj, site):
     local_dt = local.localize(datetime_obj, is_dst=None)
     utc_dt = local_dt.astimezone(pytz.utc)
     return utc_dt
+
+
+def calc_entropy(arr, fuzzy=False, m=2, r=None):
+    """
+    A function to calculate either Sample Entropy (SampEn)
+    or Fuzzy Entropy (FuzzEn) of a given array.
+    This uses basic features of EntropyHub module's SampEn and
+    FuzzEn functions. Regarding FuzzEn, if you're interested in
+    exploring more, using EntropyHub.FuzzEn directly is recommended.
+    For more detail, please check
+    github.com/MattWillFlood/EntropyHub/blob/main/EntropyHub%20Guide.pdf
+
+    Parameters
+    ----------
+        arr: list or NumPy.array
+            the time series whose entropy value will be calculated
+        fuzzy: boolean
+            if True, then calculate FuzzEn; default is False
+        m: int
+            the size of the embedding dimension; default is 2
+        r: float | tuple | None
+            the radius of the neighbourhood / default is None
+            This will make use of the default options of SampEn and FuzzEn
+            from EntropyHub (r=0.2*SD(arr) for SampEn, r=(0.2, 2) for FuzzEn).
+
+    Returns
+    -------
+        ent: float
+            value of SampEn or FuzzEn
+    """
+    if not fuzzy:
+        ent = SampEn(arr, m=m, r=r)
+    else:
+        if r is None:
+            ent = FuzzEn(arr, m=m)
+        else:
+            ent = FuzzEn(arr, m=m, r=r)
+
+    return ent
 
 def make_start_end_datetime(redcap_csv, filename, site):
     """

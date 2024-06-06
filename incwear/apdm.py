@@ -14,15 +14,17 @@ class OpalV2(BaseProcess):
     A class that will store (preliminarily) processed data
         recorded in the OPAL V2sensors
     """
-    def __init__(self, filename, label_r, in_en_dts=None,
+    def __init__(self, filename, label_r=None, in_en_dts=None,
                  offset=None, gs=None, thr_method='orig', **kwargs):
         """
         Parameters
         ----------
         filename: str
             *.h5 data file's name
-        label_r: str
+        label_r: str | None
             string that identifies the "r"ight side
+            If None, try all sensor keys and randomly choose
+            left or right
         in_en_dts: list | None
             list of datetime objects to trim the full recording
             If None, then the entire recording will be used for
@@ -63,17 +65,37 @@ class OpalV2(BaseProcess):
             if len(sids) == 0:
                 raise SensorMissingError("No sensor recording exists")
 
-            # We need to find out which sensor was attached to which leg
-            # First, we read the label of the second Case ID (sensorlabel)
-            sensorlabel = sensors[sids[1]]\
-                    ['Configuration'].attrs["Label 0"].decode()
-            # Second, we compare sensorlabel with the user provided label
-            # for the "right" (ex. 'right', 'R', 'Right_leg', 'derecho'...)
-            # If the match is True, then ridx = 1, or the second Case ID.
-            # If the match if False, then ridx = 0, the first Case ID.
-            ridx = label_r.lower() in sensorlabel.lower()
-            sensordict = {'L': sensors[sids[not ridx]],
-                          'R': sensors[sids[ridx]]}
+            # Usually there are 2 sensors in a .h5 file
+            if len(sids) == 2:
+                # We need to find out which sensor was attached to which leg
+                # First, we read the label of the second Case ID (sensorlabel)
+                sensorlabel = sensors[sids[1]]\
+                        ['Configuration'].attrs["Label 0"].decode()
+                # Second, we compare sensorlabel with the user provided label
+                # for the "right" (ex. 'right', 'R', 'Right_leg', 'derecho'...)
+                # If the match is True, then ridx = 1, or the second Case ID.
+                # If the match if False, then ridx = 0, the first Case ID.
+                if label_r is not None:
+                    ridx = label_r.lower() in sensorlabel.lower()
+                else:
+                    print("No right leg identifier string provided.")
+                    ridx = 0
+                sensordict = {'L': sensors[sids[not ridx]],
+                              'R': sensors[sids[ridx]]}
+            # This is for a testing purpose, and not a typically expected case.
+            # The case of FOUR sensor data in one h5 file
+            else:
+                # vibrantly moved sensors should display greater sd values
+                # non-moving sensors are assumed to be mostly silent.
+                gvars = {sid: np.std(sensors[sid]['Accelerometer'][:, 2])
+                         for sid in sids}
+                # lsid: a tuple - (sensorid: sd of measured g values)
+                # sort `gvar` in a descending order, and take the first two
+                lsid, rsid = sorted(gvars.items(),
+                                    key=lambda x: x[1],
+                                    reverse=True)[0:2]
+                sensordict = {'L': sensors[sids[sids.index(lsid[0])]],
+                              'R': sensors[sids[sids.index(rsid[0])]]}
 
             # Index with the recording start time(in) and the end time(en)
             # Note that in_en_dts are given in UTC as well
@@ -157,7 +179,7 @@ class OpalV1(BaseProcess):
         recorded in a pair of Opal V1 sensors
     This may need more work (7/12/2023)
     """
-    def __init__(self, filename, in_en_dts, **kwargs):
+    def __init__(self, filename, in_en_dts, btn_ignore=False, **kwargs):
         """
         **kwargs:
         lsensorlist: list
@@ -186,30 +208,44 @@ class OpalV1(BaseProcess):
             if 'lsensorlist' in kwargs:
                 is_l = sids[1] in kwargs.get('lsensorlist')
             # If no log is provided, the first id corresponds to the left
+            elif len(sensors.attrs['MonitorLabelList']) > 0:
+                first_label = sensors.attrs['MonitorLabelList'][0].decode()
+                print(f'First label found: {first_label}')
+                if 'left' in first_label.lower().split():
+                    print('The label has the keyword - left')
+                    is_l = 0
+                else:
+                    is_l = 1
             else:
                 is_l = False
             print('LEFT SENSOR ID: ', sids[is_l])
             sensordict = {'L': sensors[sids[is_l]],
                           'R': sensors[sids[~is_l]]}
             # We don't know which of the two sensors' button was pressed...
-            try:
-                indexed1 = np.where(sensordict['L']['ButtonStatus'][:]==1)[0][0]
-                print('Left Button Pressed: ', indexed1)
+            # ... but skip it if a user wants to ignore and just want to see the full data
+            if btn_ignore:
                 rowidx = self._prep_row_idx(sensordict['L']['Time'],
-                                            in_en_dts,
-                                            btnstatus=indexed1)
-            except:
+                                            in_en_dts)
+                indexed1 = 0
+            else:
                 try:
-                    indexed1 = np.where(sensordict['R']['ButtonStatus'][:]==1)[0][0]
-                    print('Right Button Pressed: ', indexed1)
+                    indexed1 = np.where(sensordict['L']['ButtonStatus'][:]==1)[0][0]
+                    print('Left Button Pressed: ', indexed1)
+                    rowidx = self._prep_row_idx(sensordict['L']['Time'],
+                                                in_en_dts,
+                                                btnstatus=indexed1)
                 except:
-                    indexed1 = 0
-                    print('No Button Press ', indexed1)
-                rowidx = self._prep_row_idx(sensordict['R']['Time'],
-                                            in_en_dts,
-                                            btnstatus=indexed1)
+                    try:
+                        indexed1 = np.where(sensordict['R']['ButtonStatus'][:]==1)[0][0]
+                        print('Right Button Pressed: ', indexed1)
+                    except:
+                        indexed1 = 0
+                        print('No Button Press ', indexed1)
+                    rowidx = self._prep_row_idx(sensordict['R']['Time'],
+                                                in_en_dts,
+                                                btnstatus=indexed1)
 
-            print('Range of the data points: ', rowidx[0], rowidx[-1])
+                print('Range of the data points: ', rowidx[0], rowidx[-1])
 
             accmags = self._get_mag(
                     {x: sensordict[x]['Calibrated']['Accelerometers']
@@ -268,7 +304,10 @@ class OpalV2Single(BaseProcess):
 
         with h5py.File(filename, 'r') as h5file:
             sensors = h5file['Sensors']
-            sids = list(sensors.keys())[0]
+            if 'sid' in kwargs:
+                sids = kwargs.get('sid')
+            else:
+                sids = list(sensors.keys())[0]
 
             sensordict = {'L': sensors[sids]}
             rowidx = self._prep_row_idx(sensordict['L'], in_en_dts)
@@ -343,11 +382,20 @@ class OpalV2Single(BaseProcess):
             self.measures.thresholds = thresholds
             self.measures.__post_init__()
 
+
 class OpalV2Calib(CalibProcess):
     def __init__(self, calib1, g_thresholds=[9.7, 9.9], **kwargs):
         super().__init__()   # absolute, winlen, stdcut inherited
         sensors = h5py.File(calib1)['Sensors']
         id_list = list(sensors.keys())  # length is 1 or 2
+        # If 'sid' is provided, handle only that one.
+        # If provided sid is not in id_list, then throw an error.
+        errmsg = "sid not in the data. Please check your argument again."
+        if 'sid' in kwargs:
+            temp = kwargs.get('sid')
+            if temp not in id_list:
+                raise ValueError(errmsg)
+            id_list = [kwargs.get('sid')]
         self.g_thresholds = g_thresholds
         self.info.fs = 20
         ss_l = sensors[id_list[0]]['Accelerometer']
