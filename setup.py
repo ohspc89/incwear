@@ -13,4 +13,4 @@ setuptools.setup(name="incwear-ohspc89",
         url= "github.com/ohspc89/incwear.git",
         packages=['incwear'],
         classifiers=["Programming Language :: Python :: 3", "License :: OSI Approved :: MIT License", "Operating System :: OS Independent",],
-        python_requires='>=3.8',)
+        python_requires='>=3.10',)
