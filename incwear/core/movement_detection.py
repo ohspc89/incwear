@@ -241,25 +241,3 @@ def get_mov(accmags, velmags, fs, th_crossed, over_accth, under_naccth,
     movidx_nz2 = movidx_nz[np.nonzero(movidx_nz[:, 0])[0],]
 
     return movidx_nz2
-
-    
-def acc_per_mov(accvec, movmat):
-    """
-    Calculate mean and peak acc magnitude per movement
-
-    Parameters
-    ----------
-    accvec : numpy.ndarray
-        Vector of absolute acceleration magnitudes.
-    movmat : numpy.ndarray
-        Movement index matrix (start, mid, end).
-
-    Returns
-    -------
-    numpy.ndarray
-        [start index | avg acc | peak acc] per movement
-    """
-    return np.array([
-        [start, np.mean(accvec[start:end + 1]), max(accvec[start:end + 1])]
-        for start, _, end in movmat
-        ])

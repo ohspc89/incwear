@@ -210,3 +210,25 @@ def rate_calc(lmovmat, rmovmat, recordlen, fs, thratio=0.2):
             'rrec_hr': rrec_hr,
             'lsleep_hr': lsleep_hr,
             'rsleep_hr': rsleep_hr}
+
+    
+def acc_per_mov(accvec, movmat):
+    """
+    Calculate mean and peak acc magnitude per movement
+
+    Parameters
+    ----------
+    accvec : numpy.ndarray
+        Vector of absolute acceleration magnitudes.
+    movmat : numpy.ndarray
+        Movement index matrix (start, mid, end).
+
+    Returns
+    -------
+    numpy.ndarray
+        [start index | avg acc | peak acc] per movement
+    """
+    return np.array([
+        [start, np.mean(accvec[start:end + 1]), max(accvec[start:end + 1])]
+        for start, _, end in movmat
+        ])
