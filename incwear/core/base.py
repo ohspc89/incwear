@@ -9,14 +9,14 @@ accommodating the need of processing data from different sensors.
 
 © 2023-2025 Infant Neuromotor Control Laboratory. All rights reserved.
 """
-import site
-site.addsitedir('/Users/joh/Downloads/incwear/utils')
 import numpy as np
-from data_models import RecordingInfo, Processed
-from thresholds import get_ind_acc_threshold, get_ind_acc_threshold2
-from plot_segment import plot_segment
-from preprocessing import get_mag, correct_gain, low_pass, resample_to
-from movement_detection import get_cntc, get_mov
+from incwear.utils.data_models import RecordingInfo, Processed
+from incwear.utils.thresholds import (get_ind_acc_threshold,
+                                      get_ind_acc_threshold2)
+from incwear.utils.plot_segment import plot_segment
+from incwear.core.preprocessing import (get_mag, correct_gain,
+                                        low_pass, resample_to)
+from incwear.core.movement_detection import get_cntc, get_mov
 
 
 class BaseProcess:

@@ -8,30 +8,18 @@ Plotting segments
 """
 import numpy as np
 import matplotlib.pyplot as plt
-
-LABEL_MAP = {
-        'L': ('lmag', 'laccth', 'lnaccth'),
-        'R': ('rmag', 'raccth', 'rnaccth'),
-        'U': ('umag', 'accth', 'naccth'),
-        }
+from matplotlib.ticker import FuncFormatter
 
 
-def plot_segment(fs, accmags_dict, velmags_dict, thresholds, time_passed,
-                 duration=20, side='L', movmat=None, title=None, show=True,
-                 savepath=None):
+def plot_segment(Ax6_object, time_passed, duration=20, side='L',
+                 movmat=None, title=None, show=True, savepath=None):
     """
     Plot movement segments for manual verification or visualization.
 
     Parameters
     ----------
-    fs : int
-        Sampling frequency.
-    accmags : numpy.ndarray
-        Acceleration magnitudes.
-    velmags : numpy.ndarray
-        Velocity magnitudes.
-    thresholds : dict
-        Dictionary with keys: 'accth', 'naccth'.
+    Ax6_object : Ax6
+        Ax6 Class object
     time_passed : float
         Time offset from the beginning in seconds.
     duration : int
@@ -60,16 +48,16 @@ def plot_segment(fs, accmags_dict, velmags_dict, thresholds, time_passed,
         # new_t = self.info.record_times[0]\
         #         + timedelta(seconds=time_passed)
         # end_t = self.info.record_times[1]
-    pth = thresholds[labels[1]]
-    nth = thresholds[labels[2]]
+    pth = Ax6_object.measures.thresholds['accth']
+    nth = Ax6_object.measures.thresholds['naccth']
 
-    startidx = int(time_passed * fs)
-    endidx = startidx + int(duration * fs) + 1
+    startidx = int(time_passed * Ax6_object.info.fs)
+    endidx = startidx + int(duration * Ax6_object.info.fs) + 1
 
     _, ax = plt.subplots(1)
     handles = []
-    accline, = ax.plot(accmags[startidx:endidx], marker='o',
-                       c='pink', label='acceleration')
+    accline, = ax.plot(Ax6_object.measures.accmags[startidx:endidx],
+                       marker='o', c='pink', label='acceleration')
     handles.append(accline)
     pthline = ax.axhline(y=pth, c='k', linestyle='dotted',
                          label='positive threshold')
@@ -81,8 +69,9 @@ def plot_segment(fs, accmags_dict, velmags_dict, thresholds, time_passed,
     ax.axhline(y=0, c='r')  # baseline
     # If Ax6 or Active, convert from 1 deg/s to 0.017453 rad/s
     # rad_convert = 0.017453 if self._name in ['Ax6', 'Ax6Single'] else 1
-    velline, = ax.plot(velmags[startidx:endidx], c='deepskyblue',
-                       linestyle='dashdot', label='angular velocity')
+    velline, = ax.plot(Ax6_object.measures.velmags[startidx:endidx],
+                       c='deepskyblue', linestyle='dashdot',
+                       label='angular velocity')
     handles.append(velline)
 
     if movmat is not None:
@@ -107,26 +96,31 @@ def plot_segment(fs, accmags_dict, velmags_dict, thresholds, time_passed,
                         zip(movmat[mov_st[0]:fi2, 0], mov_lens) if l > 0]
 
             if len(hull) > 0:
-                hl, = ax.plot(hull[0] - startidx, accmags[hull[0]], c='g',
-                              linewidth=2, label='movement')
+                hl, = ax.plot(hull[0] - startidx,
+                              Ax6_object.measures.accmags[hull[0]],
+                              c='g', linewidth=2, label='movement')
                 handles.append(hl)
                 prevend = (hull[0] - startidx)[-1]
 
                 for j in range(1, len(hull)):
                     new_xs = hull[j] - startidx
-                    ax.plot(new_xs, accmags[hull[j]], c='g', linewidth=2)
+                    ax.plot(new_xs, Ax6_object.measures.accmags[hull[j]],
+                            c='g', linewidth=2)
                     if new_xs[0] == prevend:
-                        ax.scatter(x=new_xs[0], y=accmags[hull[j]][0],
+                        ax.scatter(x=new_xs[0],
+                                   y=Ax6_object.measures.accmags[hull[j]][0],
                                    color='red', marker='s')
                     prevend = new_xs[-1]
 
     ax.legend(handles=handles)
     ax.set_xlabel("Time (sec)")
     ax.set_ylabel("Acc. magnitude (m/s^2)")
-    ax.set_title(title or f"Movement Segment ({side})")
+    ax.set_title(title or
+                 (f"Movement Segment ({side}),\n" +
+                  f"{time_passed}s from the start of the (trimmed) recording"))
 
     ax.xaxis.set_major_formatter(
-            plt.FuncFormatter(lambda x, pos: f"{x / fs:.1f}")
+            FuncFormatter(lambda x, pos: f"{x / Ax6_object.info.fs:.1f}")
     )
 
     default_tiff = f'Seg-{int(time_passed)}_Dur_{int(duration)}-{side}.tiff'

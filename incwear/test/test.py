@@ -1,12 +1,8 @@
-import site
-site.addsitedir('/Users/joh/Downloads/incwear/core')
-site.addsitedir('/Users/joh/Downloads/incwear/computation')
 from pathlib import Path
-import matplotlib.pyplot as plt
-import numpy as np
 
-import axivity
-import movement_metrics as mm
+from incwear.core import axivity
+import incwear.computation.movement_metrics as mm
+from incwear.utils.plot_segment import plot_segment
 
 # Passes cwa test...
 directory = Path('/Users/joh/Downloads/OneDrive_1_7-21-2025')
@@ -29,7 +25,18 @@ motion_tsvs = list(directory_tsv.glob('*_motion.tsv'))
 left_tsvs = [l for l in motion_tsvs if 'LeftLegMovement' in l.name]
 right_tsvs = [r for r in motion_tsvs if 'RightLegMovement' in r.name]
 
-tsv_leftleg = axivity.Ax6(*[str(x) for x in left_tsvs])
+tsv_leftleg = axivity.Ax6(*[str(x) for x in left_tsvs],
+                          trim_window=(3600, None))
+
+lmovs_zero = tsv_leftleg.detect_movements()
+
+tsv_leftleg._filter()
+
+# Plotting
+plot_segment(tsv_leftleg,
+             time_passed=200,
+             duration=2000,
+             movmat = lmovs_zero,)
 
 # Subject version
 tsv_subj = axivity.Ax6Subject(

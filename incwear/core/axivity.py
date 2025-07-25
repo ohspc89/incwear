@@ -4,16 +4,13 @@ Script prepared to process Ax6 sensor data by Jinseok Oh, Ph.D.
 © 2023-2024 Infant Neuromotor Control Laboratory, All Rights Reserved
 """
 # Will delete this ultimately...
-import site
 from pathlib import Path
 import numpy as np
-import cwa_metadata as cmd
-site.addsitedir('/Users/joh/Downloads/incwear/base')
-site.addsitedir('/Users/joh/Downloads/incwear/utils')
-from base import BaseProcess
-from calib_process import CalibProcess
-from io_utils import read_cwa, read_tsv
-from calib_utils import get_axis_bias_v2
+import incwear.core.cwa_metadata as cmd
+from incwear.core.base import BaseProcess
+from incwear.core.calib_process import CalibProcess
+from incwear.utils.io_utils import read_cwa, read_tsv
+from incwear.utils.calib_utils import get_axis_bias_v2
 
 
 class Ax6(BaseProcess):
@@ -32,22 +29,23 @@ class Ax6(BaseProcess):
         **kwargs
         resample : bool
             Whether to downsample to 20Hz (Smith et al. 2015)
-        in_en_dts : list or None
-            list of timestamps marking the start and the end of the
-            dataset to be processed. If None, entire dataset is processed.
+        trim_window : tuple [float, float]
+            Start and end time (in seconds) to trim the timeseries
+            before processing. Either or both numbers can be None.
         det_option : str
-            subtracting magnitude 'median' or 1 g ('customfunc')
+            Option to choose between subtracting magnitude 'median' or 1 g
+            ('customfunc')
         apply_filter : bool
-            Whether to apply filter (True) or not (False)
+            Whether to apply filter (True) or not (False).
         fc : int
-            Cut-off frequency for low-pass filtering
+            Cut-off frequency for low-pass filtering.
         timezone : str
-            timezone of the study site
+            Timezone of the study site.
         """
         super().__init__(filename=recording)
         self.suffix = Path(recording).suffix
         # If two file extensions are different
-        if self.suffix not in ['.cwa', '.tsv'] :
+        if self.suffix not in ['.cwa', '.tsv']:
             raise ValueError(
                     f"A recording filename's extension should be "
                     "'.cwa' or '.tsv'. "
@@ -56,7 +54,6 @@ class Ax6(BaseProcess):
 
         self._load()    # read files
 
-        self.info.rowidx = None     # How are you going to handle it?
         if self.suffix == '.cwa':
             fs = cmd.cwa_info(recording)['header']['sampleRate']
         else:
@@ -69,6 +66,19 @@ class Ax6(BaseProcess):
                     f"{self.info.fname} at {fs} Hz."
                     )
         self.info.fs = fs
+
+        self.info.rowidx = None     # How are you going to handle it?
+        if kwargs.get("trim_window", False):
+            window = kwargs.get("trim_window", (None, None))
+            if all((window[0] is None, window[1] is None)):
+                self.info.rowidx = None
+            elif window[0] is None:
+                self.info.rowidx = np.arange(
+                        0, int(window[1] * self.info.fs) + 1)
+            elif window[1] is None:
+                self.info.rowidx = np.arange(
+                        int(window[0] * self.info.fs),
+                        self.skdh['accel'].shape[0])
 
         # Here we can prepare for calibrating values.
         # If you don't provide it, you will just fail.
@@ -88,6 +98,7 @@ class Ax6(BaseProcess):
             self._resample()
 
         # If you decide to filter, check if you provided a cut-off frequency
+        # Not so useful, because we're creating a first-order filter
         self.info.fc = kwargs.get('fc', 8)
 
         # Just make this a self's attribute...
@@ -95,8 +106,7 @@ class Ax6(BaseProcess):
             self._filter()
 
         # if timezone is provided...
-        if 'timezone' in kwargs:
-            self.info.timezone = kwargs.get('timezone')
+        self.info.timezone = kwargs.get('timezone', '')
 
         # final update
         self._update()
@@ -124,7 +134,6 @@ class Ax6(BaseProcess):
         # Gain corrected...
         if gs is not None:
             gain_corrected = self.correct_gain(aligned, get_axis_bias_v2(gs))
-            
         else:
             gain_corrected = aligned
 
@@ -134,9 +143,9 @@ class Ax6(BaseProcess):
     def _resample(self):
         # resample
         re_fs = 20
-        self.measures.accmags = self.resample_to(
+        _, self.measures.accmags = self.resample_to(
                 self.measures.accmags, self.info.fs, re_fs)
-        self.measures.velmags = self.resample_to(
+        _, self.measures.velmags = self.resample_to(
                 self.measures.velmags, self.info.fs, re_fs)
         # update the sampling frequency information
         self.info.fs = re_fs

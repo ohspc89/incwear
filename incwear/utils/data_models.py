@@ -68,7 +68,7 @@ class RecordingInfo:
         Timezone of the location where sensors were setup
     label_r : str
         String used to indicate the right side (required for Opal V2)
-    rowidx : list | None
+    rowidx : numpy.ndarray | list | None
         List of indices of the rows to be processed.
     recordlen : int
         Length of a recording in the number of data points.
@@ -79,5 +79,5 @@ class RecordingInfo:
     fc: int | None
     timezone: str
     label_r: str | None
-    rowidx: list | None
+    rowidx: np.ndarray | list | None
     recordlen: int

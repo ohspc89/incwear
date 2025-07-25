@@ -31,8 +31,9 @@ def calc_ind_threshold(maxprop):
     float
         Threshold value.
     """
-    return np.mean(maxprop['peak_heights'])\
-            - np.std(maxprop['peak_heights'])
+    return (np.mean(maxprop['peak_heights']) -
+            np.std(maxprop['peak_heights']))
+
 
 # This is equivalent to the MATLAB script
 def get_ind_acc_threshold(accmags, calc_thresh_fn=calc_ind_threshold,
@@ -44,13 +45,10 @@ def get_ind_acc_threshold(accmags, calc_thresh_fn=calc_ind_threshold,
     ----------
     accmags : numpy.ndarray
          Detrended acceleration magnitudes.
-
     calc_thresh_fn : function
         Function to compute individual threshold from peaks.
-
     reject : float
         Peak value rejection threshold.
-
     height : float
         Minimum peak height
 
@@ -78,7 +76,7 @@ def get_ind_acc_threshold(accmags, calc_thresh_fn=calc_ind_threshold,
 
 def get_ind_acc_threshold2(accmags, reject=3.2501, height=1.0):
     """
-    Alternate threshold calculation - a more correct form of Smith et al. (2015)
+    Alternate threshold calculation: a more correct form of Smith et al. (2015)
 
     Parameters
     ----------

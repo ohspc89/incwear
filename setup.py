@@ -3,7 +3,7 @@ import setuptools
 with open("README.md") as file:
     read_me_description = file.read()
 
-setuptools.setup(name="incwear-ohspc89",
+setuptools.setup(name="incwear",
         version="0.1",
         author="Jinseok Oh, PhD",
         author_email="jinseok.oh@pm.me",

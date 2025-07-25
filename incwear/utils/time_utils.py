@@ -198,7 +198,6 @@ def make_start_end_datetime(redcap_csv, filename, site):
 
         return result
 
-
     idx = redcap_csv.filename.apply(lambda x: match_any(x, filename))
 
     don_n_doff = redcap_csv.loc[np.where(idx)[0][0], ['don_t', 'doff_t']]
@@ -233,8 +232,9 @@ def make_start_end_datetime(redcap_csv, filename, site):
         # Let's hope for the best that everyone removed the sensors
         #   before 2 PM the next day.
 
-        nextday = any((all((int(doff_h) < 14,
-                            abs(int(don_h) - int(doff_h)) < 10)), int(doff_h) < 12))
+        nextday = any((all((
+            int(doff_h) < 14,
+            abs(int(don_h) - int(doff_h)) < 10)), int(doff_h) < 12))
 
         if nextday:
             doff_dt = doff_temp + timedelta(days=1)
@@ -242,5 +242,6 @@ def make_start_end_datetime(redcap_csv, filename, site):
             doff_dt = doff_temp
 
         # site-specific don/doff times are converted to UTC time
-        utc_don_doff = list(map(lambda lst: convert_to_utc(lst, site), [don_dt, doff_dt]))
+        utc_don_doff = list(map(
+            lambda lst: convert_to_utc(lst, site), [don_dt, doff_dt]))
     return utc_don_doff

@@ -71,14 +71,10 @@ def correct_gain(arr, gains):
 
     Returns
     -------
-    x : numpy.ndarray
+    numpy.ndarray
         Gain-corrected sensor data.
     """
-    newx = [x/gains[0] for x in arr[:, 0]]
-    newy = [y/gains[1] for y in arr[:, 1]]
-    newz = [z/gains[2] for z in arr[:, 2]]
-
-    return np.column_stack((newx, newy, newz))
+    return arr / np.array(gains)
 
 
 def low_pass(fc, fs, arr, window='hamming'):
