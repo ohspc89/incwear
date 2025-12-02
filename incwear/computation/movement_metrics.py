@@ -219,16 +219,18 @@ def acc_per_mov(accvec, movmat):
     Parameters
     ----------
     accvec : numpy.ndarray
-        Vector of absolute acceleration magnitudes.
+        Vector of (absolute) acceleration magnitudes.
     movmat : numpy.ndarray
-        Movement index matrix (start, mid, end).
+        Movement index matrix (start, mid, end, lag).
 
     Returns
     -------
     numpy.ndarray
         [start index | avg acc | peak acc] per movement
     """
+    # In case raw, not absolute magnitude is provided
+    accvec = abs(accvec)
     return np.array([
         [start, np.mean(accvec[start:end + 1]), max(accvec[start:end + 1])]
-        for start, _, end in movmat
+        for start, _, end, _ in movmat
         ])
