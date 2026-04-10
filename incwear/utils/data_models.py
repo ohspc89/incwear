@@ -58,6 +58,8 @@ class RecordingInfo:
     ----------
     fname : str
         File names (.cwa or .h5)
+    configured_record_times : dict
+        Dictionary of times that were configured
     record_times : dict
         Dictionary of timestamps of the first and the last VALID data points
     fs : int
@@ -74,6 +76,7 @@ class RecordingInfo:
         Length of a recording in the number of data points.
     """
     fname: str
+    configured_record_times: dict
     record_times: dict
     fs: int
     fc: int | None

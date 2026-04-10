@@ -9,6 +9,7 @@ Preprocessing related functions
 from fractions import Fraction
 import numpy as np
 from scipy.signal import firwin, lfilter, resample_poly
+from scipy.interpolate import interp1d
 
 
 def get_mag(arr, row_idx=None, det_option='median'):
@@ -102,9 +103,11 @@ def low_pass(fc, fs, arr, window='hamming'):
     return lfilter(h, 1, arr)
 
 
-def resample_to(arr, orig_fs, re_fs):
+def resample_to(arr, orig_fs, re_fs, ts,
+                max_denominator=100):
     """
-    Resample signal from orig_fs to re_fs using polyphase filtering.
+    Resample signal from orig_fs to re_fs using polyphase filtering,
+    with symmetric padding to mitigate FIR edge transients.
 
     Parameters
     ----------
@@ -114,20 +117,45 @@ def resample_to(arr, orig_fs, re_fs):
         Original sampling frequency.
     re_fs : float
         Target sampling frequency.
+    ts : numpy.ndarray
+        A series of intervals from the start (0)
+    max_denominator : int, optional
+        Maximum denominator for rational resampling ratio.
 
     Returns
     -------
     tuple of (numpy.ndarray, numpy.ndarray)
         (new_time_array, resampled_data)
     """
-    ratio = re_fs / orig_fs
-    frac = Fraction(ratio).limit_denominator(100)
+    # --- interpolation should be done ---
+    # Fix the option to linear... cubic may be too much
+    new_time = np.arange(0, len(arr) / re_fs, 1.0 / re_fs)
+    arr = np.interp(
+        new_time,
+        ts,
+        arr)
 
-    resampled = resample_poly(arr, up=frac.numerator,
-                              down=frac.denominator, axis=0)
+    # If you're just 'correcting the interval', why bother resample?
+    print("[INFO] interpolation completed")
+    if re_fs == orig_fs:
+        return new_time, arr
 
-    duration = arr.shape[0] / orig_fs
-    new_len = resampled.shape[0]
-    new_time = np.linspace(0, duration, new_len, endpoint=False)
+    frac = Fraction(re_fs / orig_fs).limit_denominator(max_denominator)
+
+    # --- Resampling (polyphase FIR) ---
+    resampled = resample_poly(
+        arr,
+        up=frac.numerator,
+        down=frac.denominator,
+        axis=0)
+
+    # --- Trim ---
+    # Padding scales by the resampling ratio
+    trim = int(np.ceil(5 * max(frac.numerator, frac.denominator)))
+
+    resampled = resampled[trim:-trim]
+
+    # --- Correct time axis ---
+    new_time = np.arange(resampled.shape[0]) / re_fs
 
     return new_time, resampled

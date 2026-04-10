@@ -18,17 +18,18 @@ class Ax6(BaseProcess):
     This is a class that contains preprocessed info of cwa files.
     """
     # (7/18/24) Removing `study_tz` from the parameters
-    def __init__(self, calibration, recording, **kwargs):
+    def __init__(self, calibration, recording,
+                 **kwargs):
         """
         Attributes
         ----------
-        calibration : str
+        calibration : Path | str
             Path to the calibration file
-        recording : str
+        recording : Path | str
             Path to the movement recording file
         **kwargs
-        resample : bool
-            Whether to downsample to 20Hz (Smith et al. 2015)
+        re_fs : int
+            Frequency to resample at
         trim_window : tuple [float, float]
             Start and end time (in seconds) to trim the timeseries
             before processing. Either or both numbers can be None.
@@ -55,7 +56,14 @@ class Ax6(BaseProcess):
         self._load()    # read files
 
         if self.suffix == '.cwa':
-            fs = cmd.cwa_info(recording)['header']['sampleRate']
+            metadata = cmd.cwa_info(recording)
+            fs = metadata["header"]["sampleRate"]
+            self.info.configured_record_times['Start'] = metadata["header"]["loggingStartTime"]
+            self.info.configured_record_times['End'] = metadata["header"]["loggingEndTime"]
+            self.info.record_times['Start'] = metadata["first"]["timestampTime"]
+            self.info.record_times["End"] = metadata["last"]["timestampTime"]
+            # Time: diff from onset
+            self.skdh['time'] = self.skdh['time'] - self.skdh['time'][0]
         else:
             # Rough estimation of fs based on the first 8 timestamps
             fs = round(np.mean([1/x for x in np.diff(self.skdh['time'][0:9])]))
@@ -79,6 +87,17 @@ class Ax6(BaseProcess):
                 self.info.rowidx = np.arange(
                         int(window[0] * self.info.fs),
                         self.skdh['accel'].shape[0])
+            else:
+                # NEW: Keep between start_time and end_time
+                start = int(window[0] * self.info.fs)
+                end = int(window[1] * self.info.fs) + 1
+
+                if end <= start:
+                    raise ValueError(
+                        f"trim_window end must be greater than start. Got {window}"
+                        )
+                end = min(end, self.skdh['accel'].shape[0])
+                self.info.rowidx = np.arange(start, end)
 
         # Here we can prepare for calibrating values.
         # If you don't provide it, you will just fail.
@@ -94,7 +113,15 @@ class Ax6(BaseProcess):
         self.measures.velmags = .017453 * self.measures.velmags
 
         # If you decide to resample...
-        if kwargs.get('resample', False):
+        self.re_fs = kwargs.get('re_fs', None)
+        if self.re_fs is not None:
+            print(f"[INFO] Resampling at {self.re_fs} Hz...")
+            if not isinstance(self.re_fs, int):
+                raise ValueError(f"re_fs should be an integer: {self.re_fs}")
+            if self.re_fs <= self.info.fs/2:
+                raise ValueError(
+                    "re_fs cannot be smaller than the nyquist frequency: "
+                    f"{self.info.fs/2}")
             self._resample()
 
         # If you decide to filter, check if you provided a cut-off frequency
@@ -141,14 +168,19 @@ class Ax6(BaseProcess):
         self.calibrated = gain_corrected
 
     def _resample(self):
+        if self.info.rowidx is None:
+            ts = self.skdh['time']
+        else:
+            ts = self.skdh['time'][self.info.rowidx]
         # resample
-        re_fs = 20
         _, self.measures.accmags = self.resample_to(
-                self.measures.accmags, self.info.fs, re_fs)
+                self.measures.accmags, self.info.fs,
+                self.re_fs, ts)
         _, self.measures.velmags = self.resample_to(
-                self.measures.velmags, self.info.fs, re_fs)
+                self.measures.velmags, self.info.fs,
+                self.re_fs, ts)
         # update the sampling frequency information
-        self.info.fs = re_fs
+        self.info.fs = self.re_fs
 
     def _filter(self):
         self.measures.accmags = self.low_pass(
@@ -175,9 +207,13 @@ class Ax6Calib(CalibProcess):
     offset values.
     """
     def __init__(self, filename, absolute=False, **kwargs):
+        """
+        accept filename as either Path or str
+        """
         super().__init__()  # thresholds = [0.9, 1,1]
 
         # Filling in class parameters
+        filename = Path(filename)
         self.info.fname = filename
         self.absolute = absolute
         if 'stdcut' in kwargs:
@@ -185,7 +221,7 @@ class Ax6Calib(CalibProcess):
         if 'winlen' in kwargs:
             self.winlen = kwargs.get('winlen')
 
-        if filename.endswith('tsv'):
+        if filename.suffix == '.tsv':
             temp = read_tsv(filename)
             self.raw = temp[:, [1, 2, 3]]
             self.info.fs = round(np.mean([1/x for x in np.diff(temp[0:9, 0])]))

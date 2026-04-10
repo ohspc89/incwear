@@ -1,0 +1,8 @@
+numpy
+pandas
+scipy
+pytz
+pyarrow
+scikit-digital-health
+matplotlib
+EntropyHub==2.0

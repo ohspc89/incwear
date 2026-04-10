@@ -50,6 +50,7 @@ class BaseProcess:
         # Placehodler - will be updated
         self.info = RecordingInfo(
                 fname=None,
+                configured_record_times={'Start': None, 'End': None},
                 record_times={'Start': None, 'End': None},
                 fs=0,
                 fc=0,
@@ -130,5 +131,5 @@ class BaseProcess:
         return low_pass(fc, fs, arr, window)
 
     @staticmethod
-    def resample_to(arr, orig_fs, re_fs):
-        return resample_to(arr, orig_fs, re_fs)
+    def resample_to(arr, orig_fs, re_fs, ts, **kwargs):
+        return resample_to(arr, orig_fs, re_fs, ts, **kwargs)
