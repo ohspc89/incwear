@@ -18,15 +18,15 @@ class Ax6(BaseProcess):
     This is a class that contains preprocessed info of cwa files.
     """
     # (7/18/24) Removing `study_tz` from the parameters
-    def __init__(self, calibration, recording,
+    def __init__(self, recording, calibration=None,
                  **kwargs):
         """
         Attributes
         ----------
-        calibration : Path | str
-            Path to the calibration file
         recording : Path | str
             Path to the movement recording file
+        calibration : Path | str | None
+            Path to the calibration file
         **kwargs
         re_fs : int
             Frequency to resample at
@@ -100,11 +100,13 @@ class Ax6(BaseProcess):
                 self.info.rowidx = np.arange(start, end)
 
         # Here we can prepare for calibrating values.
-        # If you don't provide it, you will just fail.
-        self.CalibObj = Ax6Calib(calibration)
+        if calibration is not None:
+            self.CalibObj = Ax6Calib(calibration)
 
-        self._normalize(self.CalibObj.info.offset,
-                        self.CalibObj.info.off_gs)
+            self._normalize(self.CalibObj.info.offset,
+                            self.CalibObj.info.off_gs)
+        else:
+            self._normalize(None, None)
 
         self.compute_magnitudes(9.80665 * self.calibrated, self.info.rowidx)
         self.compute_velocities(self.skdh['gyro'], self.info.rowidx)
