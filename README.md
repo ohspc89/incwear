@@ -3,8 +3,9 @@
 `incwear` is a Python package developed to preprocess and analyze **wearable sensor data** in infant motor behavior research. It is a translation and extension of the original MATLAB algorithm developed by the **Infant Neuromotor Control Laboratory (INC Lab)** at Children's Hospital Los Angeles.
 
 📄 Reference:  
-Smith et al. (2015), *Daily Quantity of Infant Leg Movement: Wearable Sensor Algorithm and Relationship to Walking Onset*  
-[DOI: 10.3390/s150819006](https://doi.org/10.3390/s150819006)
+Smith, B.A.; Trujillo-Priego, I.A.; Lane, C.J.; Finley, J.M.; Horak, F.B. Daily Quantity of Infant Leg Movement: Wearable Sensor Algorithm and Relationship to Walking Onset. *Sensors* **2015**, *15*, 19006-19020. [https://doi.org/10.3390/s150819006](https://doi.org/10.3390/s150819006)
+
+Oh, J.; Loeb, G.E.,; Smith, B.A. The Utility of Calibrating Wearable Sensors before Quantifying Infant Leg Movements. *Sensors* **2024**, *24*, 5736. [https://doi.org/10.3390/s24175736](https://doi.org/10.3390/s24175736)
 
 ---
 
