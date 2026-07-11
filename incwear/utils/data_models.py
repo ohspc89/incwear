@@ -1,13 +1,38 @@
 """
 Written by Jinseok Oh, Ph.D.
-2022/9/13 - present (as of 2025/7/16)
+2022/9/13 - present (as of 2026/4/16)
 
 Script storing dataclasses
 
-© 2023-2025 Infant Neuromotor Control Laboratory. All rights reserved.
+© 2023-2026 Infant Neuromotor Control Laboratory. All rights reserved.
 """
 from dataclasses import dataclass, field
 import numpy as np
+
+
+@dataclass(frozen=True)
+class Thresholds:
+    """
+    Threshold values used for movement detection.
+
+    Attributes
+    ----------
+    accth : float
+        Positive acceleration threshold.
+    naccth : float
+        Negative acceleration threshold.
+    method : str | None
+        Optional label describing how thresholds were computed.
+    reject : float | None
+        Optional peak rejection cutoff used during threshold computation.
+    height : float | None
+        Optional minimum peak height used during threshold computation.
+    """
+    accth: float
+    naccth: float
+    method: str | None = None
+    reject: float | None = None
+    height: float | None = None
 
 
 @dataclass
@@ -34,19 +59,19 @@ class Processed:
     """
     accmags: np.ndarray
     velmags: np.ndarray
-    thresholds: dict
+    thresholds: Thresholds
     over_accth: np.ndarray = field(init=False)
     under_naccth: np.ndarray = field(init=False)
     th_crossed: np.ndarray = field(init=False)
 
     def __post_init__(self):
-        pos_temp = self.accmags > self.thresholds['accth']
-        neg_temp = self.accmags < self.thresholds['naccth']
+        pos_temp = self.accmags > self.thresholds.accth
+        neg_temp = self.accmags < self.thresholds.naccth
 
         self.over_accth = pos_temp
         self.under_naccth = neg_temp
 
-        self.th_crossed = pos_temp + neg_temp * -1
+        self.th_crossed = pos_temp.astype(int) - neg_temp.astype(int)
 
 
 @dataclass
@@ -58,6 +83,8 @@ class RecordingInfo:
     ----------
     fname : str
         File names (.cwa or .h5)
+    configured_record_times : dict
+        Dictionary of times that were configured
     record_times : dict
         Dictionary of timestamps of the first and the last VALID data points
     fs : int
@@ -74,6 +101,7 @@ class RecordingInfo:
         Length of a recording in the number of data points.
     """
     fname: str
+    configured_record_times: dict
     record_times: dict
     fs: int
     fc: int | None

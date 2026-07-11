@@ -1,19 +1,61 @@
 """
 Written by Jinseok Oh, Ph.D.
-2022/9/13 - present (as of 2025/7/16)
+2022/9/13 - present (as of 2026/4/16)
 
-base.py is a python script porting MakeDataStructure_v2.m (+ α),
-    a file prepared to extract data from APDM OPAL V2 sensors.
-The class - BaseProcess - is inherited by other classes,
-accommodating the need of processing data from different sensors.
+Threshold-related utilities for movement detection.
 
-© 2023-2025 Infant Neuromotor Control Laboratory. All rights reserved.
+© 2023-2026 Infant Neuromotor Control Laboratory. All rights reserved.
 """
+from __future__ import annotations
+
+import logging
+from typing import Callable
+
 import numpy as np
 from scipy.signal import find_peaks
 
+from incwear.utils.data_models import Thresholds
+from incwear.errors import ThresholdComputationError
 
-def calc_ind_threshold(maxprop):
+logger = logging.getLogger(__name__)
+
+DEFAULT_REJECT = 3.2501
+DEFAULT_HEIGHT = 1.0
+
+
+def _sample_std(values: np.ndarray) -> float:
+    """Sample standard deviation (ddof=1), matching the article's SD.
+
+    A single peak has no dispersion to estimate, so return 0.0 instead of
+    the NaN that ``np.std(..., ddof=1)`` yields for n < 2.
+    """
+    values = np.asarray(values, dtype=float)
+    if values.size < 2:
+        return 0.0
+    return float(np.std(values, ddof=1))
+
+
+def _validate_accmags(accmags: np.ndarray) -> np.ndarray:
+    arr = np.asarray(accmags, dtype=float)
+    if arr.ndim != 1:
+        raise ValueError("accmags must be a 1D array")
+    if arr.size == 0:
+        raise ValueError("accmags must not be empty")
+    if not np.isfinite(arr).all():
+        raise ValueError("accmags contains NaN or infinite values")
+    return arr
+
+
+def _safe_peak_threshold(peak_heights: np.ndarray, *, label: str) -> float:
+    values = np.asarray(peak_heights, dtype=float)
+    if values.size == 0:
+        raise ThresholdComputationError(
+            f"No valid {label} peaks were found for threshold computation."
+        )
+    return float(np.mean(values) - _sample_std(values))
+
+
+def calc_ind_threshold(maxprop: dict) -> float:
     """
     Calculate individual threshold based on peak heights:
         mean(peak_heights) - C * std(peak_heights)
@@ -31,20 +73,26 @@ def calc_ind_threshold(maxprop):
     float
         Threshold value.
     """
-    return (np.mean(maxprop['peak_heights']) -
-            np.std(maxprop['peak_heights']))
+    return _safe_peak_threshold(maxprop.get("peak_heights", []), label="signal")
 
 
 # This is equivalent to the MATLAB script
-def get_ind_acc_threshold(accmags, calc_thresh_fn=calc_ind_threshold,
-                          reject=3.2501, height=1.0):
+# calc_thresh_fn is expected to consume the properties
+# returned by scipy.find_peaks
+# and return a scalar threshold.
+def get_ind_acc_threshold(
+    accmags: np.ndarray,
+    calc_thresh_fn: Callable[[dict], float] = calc_ind_threshold,
+    reject: float = DEFAULT_REJECT,
+    height: float = DEFAULT_HEIGHT
+) -> Thresholds:
     """
     Compute individual thresholds from acceleration magnitudes.
 
     Parameters
     ----------
     accmags : numpy.ndarray
-         Detrended acceleration magnitudes.
+        Detrended acceleration magnitudes.
     calc_thresh_fn : function
         Function to compute individual threshold from peaks.
     reject : float
@@ -54,27 +102,33 @@ def get_ind_acc_threshold(accmags, calc_thresh_fn=calc_ind_threshold,
 
     Returns
     -------
-    thresholds: dict
-         accth: positive threshold
-         naccth: negative threshold
+    Thresholds.
     """
-    mags2 = accmags.copy()
-    posvals = [u if 0 < u < reject else 0 for u in mags2]
-    negvals = [abs(u) if -reject < u < 0 else 0 for u in mags2]
+    mags = _validate_accmags(accmags)
 
-    pnpks = []
-    for mag in [posvals, negvals]:
-        pnpks.extend(find_peaks(np.array(mag), height=height)[1])
+    posvals = np.where((mags > 0) & (mags < reject), mags, 0.0)
+    negvals = np.where((mags < 0) & (mags > -reject), np.abs(mags), 0.0)
 
-    accths = list(map(calc_thresh_fn, pnpks))
+    _, pos_props = find_peaks(posvals, height=height)
+    _, neg_props = find_peaks(negvals, height=height)
 
-    tkeys = ['accth', 'naccth']
-    signvec = [1, -1]
+    pos_th = float(calc_thresh_fn(pos_props))
+    neg_th = float(calc_thresh_fn(neg_props))
 
-    return dict(zip(tkeys, np.multiply(signvec, accths)))
+    return Thresholds(
+            accth=pos_th,
+            naccth=-neg_th,
+            method="get_ind_acc_threshold",
+            reject=reject,
+            height=height
+    )
 
 
-def get_ind_acc_threshold2(accmags, reject=3.2501, height=1.0):
+def get_ind_acc_threshold2(
+        accmags: np.ndarray,
+        reject: float = DEFAULT_REJECT,
+        height: float = DEFAULT_HEIGHT
+) -> Thresholds:
     """
     Alternate threshold calculation: a more correct form of Smith et al. (2015)
 
@@ -85,27 +139,31 @@ def get_ind_acc_threshold2(accmags, reject=3.2501, height=1.0):
 
     Returns
     -------
-    dict
-        Thresholds.
+    Thresholds.
     """
-    mags2 = accmags.copy()
+    mags = _validate_accmags(accmags)
 
-    def thresholds_new(mag):
-        # make positive values 0
-        magconvt = [x if x < 0 else 0 for x in mag]
-        # then rectify
-        magrect = np.array([abs(y) for y in magconvt])
-        loc, pks = find_peaks(mag, height=height)
-        locn, pksn = find_peaks(magrect, height=height)
-        hehe = loc[np.where(pks['peak_heights'] < reject)[0]]
-        hehen = locn[np.where(pksn['peak_heights'] < reject)[0]]
-        pos_th = np.mean(mag[hehe]) - np.std(mag[hehe])
-        neg_th = np.mean(magrect[hehen]) - np.std(magrect[hehen])
-        return [pos_th, neg_th]
+    rectified_negative = np.abs(np.where(mags < 0, mags, 0.0))
 
-    accths = thresholds_new(mags2)
+    pos_locs, pos_props = find_peaks(mags, height=height)
+    neg_locs, neg_props = find_peaks(rectified_negative, height=height)
 
-    tkeys = ['accth', 'naccth']
-    signvec = [1, -1]
+    valid_pos = pos_locs[pos_props["peak_heights"] < reject]
+    valid_neg = neg_locs[neg_props["peak_heights"] < reject]
 
-    return dict(zip(tkeys, np.multiply(signvec, accths)))
+    if valid_pos.size == 0 or valid_neg.size == 0:
+        raise ThresholdComputationError(
+            "Could not compute thresholds because one or both peak sets are empty "
+            f"after applying reject={reject} and height={height}."
+        )
+
+    pos_vals = mags[valid_pos]
+    neg_vals = rectified_negative[valid_neg]
+
+    return Thresholds(
+            accth=float(np.mean(pos_vals) - _sample_std(pos_vals)),
+            naccth=-float(np.mean(neg_vals) - _sample_std(neg_vals)),
+            method="get_ind_acc_threshold2",
+            reject=reject,
+            height=height,
+    )

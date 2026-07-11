@@ -1,15 +1,24 @@
 """
 I/O utility functions for Axivity data formats (.cwa, .tsv, .csv)
+
 Written by Jinseok Oh
-© 2023-2025 Infant Neuromotor Control Laboratory. All rights reserved.
+© 2023-2026 Infant Neuromotor Control Laboratory. All rights reserved.
+
+Third-party components
+----------------------
+- Axivity .cwa file reading is performed via `skdh.io.ReadCwa`
+  from scikit-digital-health (SKDH), licensed under the MIT License.
 """
 
 import numpy as np
 from pyarrow import csv
 from skdh.io import ReadCwa
 
-sv_readOptions = csv.ReadOptions(column_names=[],
-                                 autogenerate_column_names=True)
+from incwear.errors import InvalidSensorFormatError
+
+sv_readOptions = csv.ReadOptions(
+    column_names=[],
+    autogenerate_column_names=True)
 
 
 def read_tsv(filepath, columns=None):
@@ -30,9 +39,15 @@ def read_tsv(filepath, columns=None):
     opts = csv.ReadOptions(column_names=columns) if columns else sv_readOptions
     parse_opts = csv.ParseOptions(delimiter='\t')
     with open(filepath, 'rb') as f1:
-        tsv_data = np.asarray(csv.read_csv(f1,
-                                           read_options=opts,
-                                           parse_options=parse_opts))
+        tsv_data = np.asarray(csv.read_csv(
+            f1,
+            read_options=opts,
+            parse_options=parse_opts,
+        ))
+    if tsv_data.ndim != 2 or tsv_data.shape[1] < 7:
+        raise InvalidSensorFormatError(
+            f"Expected TSV with at least 7 columns, got shape {tsv_data.shape}."
+        )
     return tsv_data
 
 
@@ -49,8 +64,7 @@ def read_csv(filepath, columns=None):
 
     Returns
     -------
-    dict
-        Dictionary of numpy arrays for each requested column
+    pandas.DataFrame
     """
     opts = csv.ReadOptions(column_names=columns) if columns else sv_readOptions
     csv_data = csv.read_csv(filepath, read_options=opts).to_pandas()
@@ -59,16 +73,17 @@ def read_csv(filepath, columns=None):
 
 def read_cwa(filepath):
     """
-    Read Axivity .cwa binary file using skdh.io.ReadCwa.
+    Read Axivity .cwa binary file using `skdh.io.ReadCwa`.
+
+    Notes
+    -----
+    This is a thin wrapper around scikit-digital-health's ``ReadCwa`` reader.
+    See the package's MIT license and project documentation for details.
 
     Parameters
     ----------
     filepath : str
         Path to .cwa file
-    resample_to_hz : int or None
-        If provided, resample to this frequency
-    convert_units : bool
-        If True, scale raw values to m/s^2 or rad/s
 
     Returns
     -------
@@ -76,5 +91,4 @@ def read_cwa(filepath):
         Dictionary with 'accel', 'gyro', and 'time'
     """
     cwa_reader = ReadCwa()
-    data = cwa_reader.predict(file=filepath)
-    return data
+    return cwa_reader.predict(file=filepath)
