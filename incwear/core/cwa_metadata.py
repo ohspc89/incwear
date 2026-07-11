@@ -1,7 +1,12 @@
 #!/usr/bin/env python
 #
-# CWA Metadata Reader
+# Vendored/adapted metadata reader for Axivity .CWA files.
+#
+# Original source:
 # Dan Jackson, Open Movement, 2017-2021
+#
+# Copyright (c) 2009-2021, Newcastle University, UK.
+# Redistribution permitted under the original Open Movement license terms.
 #
 # Output metadata from a .CWA file.
 #
@@ -12,6 +17,8 @@
 #     -mode:ldjson  - Output metadata on a single line per file (line-delimited JSON)
 #     CWA-DATA.CWA  - Name of one or more .CWA files to read metadata from
 #
+# This file is retained in incwear to provide lightweight metadata inspection
+# without requiring the external Open Movement binary tools.
 
 import os       # putting the call here to use this script elsewhere... [JO]
 import sys

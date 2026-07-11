@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "incwear"
+version = "0.1"
+description = "A package to analyze wearable sensor data"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Jinseok Oh, Ph.D.", email = "jinseok.oh@pm.me" }
+]
+
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "pytz",
+    "pyarrow",
+    "scikit-digital-health",
+    "matplotlib",
+    "EntropyHub==2.0"
+]
+
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: Other/Proprietary License",
+    "Operating System :: OS Independent"
+]
+
+[project.urls]
+Homepage = "https://github.com/ohspc89/incwear"
+
+[tool.setuptools.packages.find]
+include = ["incwear*"]
+exclude = ["incwear.test*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+    

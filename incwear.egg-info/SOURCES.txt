@@ -1,8 +1,0 @@
-README.md
-setup.py
-incwear/__init__.py
-incwear.egg-info/PKG-INFO
-incwear.egg-info/SOURCES.txt
-incwear.egg-info/dependency_links.txt
-incwear.egg-info/requires.txt
-incwear.egg-info/top_level.txt

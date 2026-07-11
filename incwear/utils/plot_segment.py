@@ -1,25 +1,25 @@
 """
 Written by Jinseok Oh, Ph.D.
-2022/9/13 - present (as of 2025/7/16)
+2022/9/13 - present (as of 2026/4/26)
 
 Plotting segments
 
-© 2023-2025 Infant Neuromotor Control Laboratory. All rights reserved.
+© 2023-2026 Infant Neuromotor Control Laboratory. All rights reserved.
 """
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 
 
-def plot_segment(Ax6_object, time_passed, duration=20, side='L',
+def plot_segment(process_obj, time_passed, duration=20, side='L',
                  movmat=None, title=None, show=True, savepath=None):
     """
     Plot movement segments for manual verification or visualization.
 
     Parameters
     ----------
-    Ax6_object : Ax6
-        Ax6 Class object
+    process_object : BaseProcess
+        Preprocessed sensor object with `.info` and `.measures`.
     time_passed : float
         Time offset from the beginning in seconds.
     duration : int
@@ -37,10 +37,11 @@ def plot_segment(Ax6_object, time_passed, duration=20, side='L',
 
     Returns
     -------
-    None
+    matplotlib.axes.Axes
+        Axis containing the plotted segment.
     """
-    if side not in 'LR':
-        raise ValueError("Invalid side. Must be 'L', 'R'")
+    if side not in {'L', 'R'}:
+        raise ValueError("Invalid side. Must be 'L' or 'R'.")
 
     # Jan 31, 23 / WHY did I do this? (checking rowidx is None)
     # Feb 09, 23 / I think this can be remove
@@ -48,30 +49,35 @@ def plot_segment(Ax6_object, time_passed, duration=20, side='L',
         # new_t = self.info.record_times[0]\
         #         + timedelta(seconds=time_passed)
         # end_t = self.info.record_times[1]
-    pth = Ax6_object.measures.thresholds['accth']
-    nth = Ax6_object.measures.thresholds['naccth']
+    pth = process_obj.measures.thresholds.accth
+    nth = process_obj.measures.thresholds.naccth
 
-    startidx = int(time_passed * Ax6_object.info.fs)
-    endidx = startidx + int(duration * Ax6_object.info.fs) + 1
+    startidx = int(time_passed * process_obj.info.fs)
+    endidx = startidx + int(duration * process_obj.info.fs) + 1
 
     _, ax = plt.subplots(1)
     handles = []
-    accline, = ax.plot(Ax6_object.measures.accmags[startidx:endidx],
-                       marker='o', c='pink', label='acceleration')
+    accline, = ax.plot(
+        process_obj.measures.accmags[startidx:endidx],
+        marker='o',
+        c='pink',
+        label='acceleration',
+    )
     handles.append(accline)
-    pthline = ax.axhline(y=pth, c='k', linestyle='dotted',
-                         label='positive threshold')
+    pthline = ax.axhline(y=pth, c='k', linestyle='dotted', label='positive threshold')
     handles.append(pthline)
-    nthline = ax.axhline(y=nth, c='k', linestyle='dashed',
-                         label='negative threshold')
+    nthline = ax.axhline(y=nth, c='k', linestyle='dashed', label='negative threshold')
     handles.append(nthline)
 
     ax.axhline(y=0, c='r')  # baseline
     # If Ax6 or Active, convert from 1 deg/s to 0.017453 rad/s
     # rad_convert = 0.017453 if self._name in ['Ax6', 'Ax6Single'] else 1
-    velline, = ax.plot(Ax6_object.measures.velmags[startidx:endidx],
-                       c='deepskyblue', linestyle='dashdot',
-                       label='angular velocity')
+    velline, = ax.plot(
+        process_obj.measures.velmags[startidx:endidx],
+        c='deepskyblue',
+        linestyle='dashdot',
+        label='angular velocity',
+    )
     handles.append(velline)
 
     if movmat is not None:
@@ -92,35 +98,52 @@ def plot_segment(Ax6_object, time_passed, duration=20, side='L',
                     hull = [np.arange(movmat[mov_st[0], 0],
                                       movmat[mov_st[0], 0] + mov_lens + 1)]
             else:
-                hull = [np.arange(x, x + l + 1) for x, l in
-                        zip(movmat[mov_st[0]:fi2, 0], mov_lens) if l > 0]
+                hull = [
+                    np.arange(x, x + l + 1)
+                    for x, l in zip(movmat[mov_st[0]:fi2, 0], mov_lens)
+                    if l > 0
+                ]
 
             if len(hull) > 0:
-                hl, = ax.plot(hull[0] - startidx,
-                              Ax6_object.measures.accmags[hull[0]],
-                              c='g', linewidth=2, label='movement')
+                hl, = ax.plot(
+                    hull[0] - startidx,
+                    process_obj.measures.accmags[hull[0]],
+                    c='g',
+                    linewidth=2,
+                    label='movement',
+                )
                 handles.append(hl)
                 prevend = (hull[0] - startidx)[-1]
 
                 for j in range(1, len(hull)):
                     new_xs = hull[j] - startidx
-                    ax.plot(new_xs, Ax6_object.measures.accmags[hull[j]],
-                            c='g', linewidth=2)
+                    ax.plot(
+                        new_xs,
+                        process_obj.measures.accmags[hull[j]],
+                        c='g',
+                        linewidth=2,
+                    )
                     if new_xs[0] == prevend:
-                        ax.scatter(x=new_xs[0],
-                                   y=Ax6_object.measures.accmags[hull[j]][0],
-                                   color='red', marker='s')
+                        ax.scatter(
+                            x=new_xs[0],
+                            y=process_obj.measures.accmags[hull[j]][0],
+                            color='red',
+                            marker='s',
+                        )
                     prevend = new_xs[-1]
 
     ax.legend(handles=handles)
     ax.set_xlabel("Time (sec)")
     ax.set_ylabel("Acc. magnitude (m/s^2)")
-    ax.set_title(title or
-                 (f"Movement Segment ({side}),\n" +
-                  f"{time_passed}s from the start of the (trimmed) recording"))
+    ax.set_title(
+        title or (
+            f"Movement Segment ({side}),\n"
+            f"{time_passed}s from the start of the (trimmed) recording"
+        )
+    )
 
     ax.xaxis.set_major_formatter(
-            FuncFormatter(lambda x, pos: f"{x / Ax6_object.info.fs:.1f}")
+        FuncFormatter(lambda x, pos: f"{x / process_obj.info.fs:.1f}")
     )
 
     default_tiff = f'Seg-{int(time_passed)}_Dur_{int(duration)}-{side}.tiff'
@@ -130,3 +153,5 @@ def plot_segment(Ax6_object, time_passed, duration=20, side='L',
                     pil_kwargs={"compression": "tiff_lzw"})
     else:
         plt.show()
+
+    return ax

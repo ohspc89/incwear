@@ -1,17 +1,24 @@
 """
 Written by Jinseok Oh, Ph.D.
-2022/9/13 - present (as of 2025/7/16)
+2022/9/13 - present (as of 2026/4/16)
 
 Calibration related functions
 
-© 2023-2025 Infant Neuromotor Control Laboratory. All rights reserved.
+© 2023-2026 Infant Neuromotor Control Laboratory. All rights reserved.
 """
+import warnings
 from itertools import repeat
 import numpy as np
 
 
 def get_axis_bias(ground_gs):
     """
+    .. deprecated::
+        Superseded by :func:`get_axis_bias_v2`, which computes per-axis gains
+        as ``(m_+1g - m_-1g) / 2`` from offset-removed measurements. This v1
+        form (``refvec - measured``) is retained only for backward
+        compatibility and will be removed in a future release.
+
     A function to calculate axis/orientation specific biases
 
     Parameters
@@ -25,6 +32,11 @@ def get_axis_bias(ground_gs):
     x : list
         list of axis/orientation specific offsets
     """
+    warnings.warn(
+        "get_axis_bias is deprecated; use get_axis_bias_v2 instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     # If it is a list of TWO lists...
     refvec = np.array([-1, 1, -1, 1, -1, 1])
     if len(ground_gs) == 2:

@@ -1,44 +1,60 @@
 """
 Written by Jinseok Oh, Ph.D.
-2022/9/13 - present (as of 2025/7/16)
+2022/9/13 - present (as of 2026/4/16)
 
 Utility functions handling the timestamps of the IMU data
 
-© 2023-2024 Infant Neuromotor Control Laboratory. All rights reserved.
+© 2023-2026 Infant Neuromotor Control Laboratory. All rights reserved.
 """
+from __future__ import annotations
+
+import logging
 import re
 from datetime import datetime, timedelta, timezone
-import pytz
+from typing import Sequence
+
 import numpy as np
 import pandas as pd
+import pytz
+
+from incwear.errors import TimingError
+
+logger = logging.getLogger(__name__)
+
+OPAL_SENSOR_TYPES = {"OpalV1", "OpalV2", "OpalV2Single"}
+AXIVITY_SENSOR_TYPES = {"Ax6", "Ax6Single"}
 
 
-def convert_timestamp_to_utc(timestamp, sensor_type, timezone_str):
+def convert_timestamp_to_utc(
+        timestamp,
+        sensor_type: str,
+        timezone_str: str):
     """
     Convert various timestamp formats to UTC datetime.
 
     Parameters
     ----------
     timestamp: int | str | numpy.datetime64
-         A timestamp in units of microseconds since 1970-1-1-0:00 UTC.
+         A timestamp from the sensor stream.
     sensor_type: str
-        One of ['OpalV2', 'OpalV1', 'Ax6', 'Ax6OmGui']
+        One of ['OpalV2', 'OpalV1', 'OpalV2Single', 'Ax6', 'Ax6Single',
+        'Ax6OmGui'].
          For Opal sensors, directly transform this to a datetime object
          For Axivity sensors, dtype is numpy.datetime64.
          If you use OmConvert, timestamp is a string.
     timezone_str : str
-        Local timezone of the data.
+        Local timezone of the data when required by the sensor format.
 
     Returns
     -------
     datetime_utc: datetime.datetime
         UTC datetime.
     """
-    if sensor_type in ['OpalV2', 'OpalV1', 'OpalV2Single']:
+    if sensor_type in OPAL_SENSOR_TYPES:
         ts = timestamp / 1e6
         return datetime.fromtimestamp(ts, timezone.utc)
 
-    if sensor_type in ['Ax6', 'Ax6Single']:
+    if sensor_type in AXIVITY_SENSOR_TYPES:
         ts = np.array(timestamp * 1e3, dtype='datetime64[ms]')
         dt_local = pd.to_datetime(ts).tz_localize(timezone_str)
         return dt_local.astimezone(pytz.utc)
@@ -53,8 +69,18 @@ def convert_timestamp_to_utc(timestamp, sensor_type, timezone_str):
     raise ValueError(f"Unknown sensor type: {sensor_type}")
 
 
-def get_don_doff_indices(sensorts, fs, don_doff_utc, sensor_type='OpalV2',
-                         btnstatus=None):
+def _delta_to_index(delta: timedelta, fs: int) -> int:
+    microseconds = (delta.days * 86400 + delta.seconds) * 1e6 + delta.microseconds
+    return int(np.round(microseconds / (1e6 / fs)))
+
+
+def get_don_doff_indices(
+    sensorts,
+    fs: int,
+    don_doff_utc,
+    sensor_type: str = 'OpalV2',
+        btnstatus: int | None = None,
+):
     """
     Convert don/doff times to sample indices.
 
@@ -75,42 +101,50 @@ def get_don_doff_indices(sensorts, fs, don_doff_utc, sensor_type='OpalV2',
 
     Returns
     -------
-    row_idx : list[int] or None
+    list[int] or None
         List of two indices (start_idx, end_idx) or None.
         If donned and doffed times are found from the REDCap export,
         (or any other source) return a list of two indices of datapoints
         that each corresponds to the start and the end of the recording.
     """
+    n_samples = len(sensorts)
+    if n_samples == 0:
+        raise ValueError("sensorts must not be empty")
+
+    if fs is None or fs <= 0:
+            raise TimingError(f"Invalid sampling frequency: {fs}")
+
     if don_doff_utc is None:
-        if btnstatus:
-            print("No don/doff time. Starting from button press.")
-            return list(range(btnstatus, len(sensorts)))
-        print("No don/doff time. Using full range.")
+        if btnstatus is not None:
+            logger.info("No don/doff time provided; using range from button press.")
+            return list(range(btnstatus, n_samples))
+        logger.info("No don/doff time; using full range.")
         return None
 
-    if btnstatus:
-        don_doff_utc[0] = convert_timestamp_to_utc(
-                sensorts[btnstatus], sensor_type, 'UTC')
+    start_utc, end_utc = don_doff_utc
 
-    def delta_to_index(delta):
-        micro = (delta.days * 86400 + delta.seconds) * 1e6 + delta.microseconds
-        return int(np.round(micro / (1e6 / fs)))
+    if btnstatus is not None:
+        start_utc = convert_timestamp_to_utc(sensorts[btnstatus], sensor_type, "UTC")
 
-    delta_start = don_doff_utc[0] - convert_timestamp_to_utc(
-            sensorts[0], sensor_type, 'UTC')
-    delta_end = don_doff_utc[1] - convert_timestamp_to_utc(
-            sensorts[0], sensor_type, 'UTC')
+    sensor_start_utc = convert_timestamp_to_utc(sensorts[0], sensor_type, "UTC")
+    start_idx = max(0, _delta_to_index(start_utc - sensor_start_utc, fs))
+    end_idx = min(_delta_to_index(end_utc - sensor_start_utc, fs), n_samples - 1)
 
-    start_idx = delta_to_index(delta_start)
-    end_idx = delta_to_index(delta_end)
-    end_idx = min(end_idx, len(sensorts) - 1)
+    if end_idx <= start_idx:
+        logger.warning(
+            "Computed end index (%s) is not greater than start index (%s); "
+            "returning an empty range.",
+            end_idx,
+            start_idx,
+        )
+        return []
 
     return list(range(start_idx, end_idx))
 
 
-def local_to_utc(timelist, study_tz):
+def local_to_utc(timelist: Sequence[int], study_tz: str):
     """
-    A function to make a datetime object with its time in UTC
+    Convert a local datetime component list to a UTC datetime.
 
     Parameters
     ----------
@@ -136,25 +170,52 @@ def local_to_utc(timelist, study_tz):
     Day (ex. 12)
     Hour (ex. 18)
     Minute (ex. 29)"""
-    assert len(timelist) >= 5, warning_msg
+    if len(timelist) < 5:
+        raise ValueError(warning_msg)
     local = pytz.timezone(study_tz)
     naive = datetime(*timelist)
     local_dt = local.localize(naive, is_dst=None)
     return local_dt.astimezone(pytz.utc)
 
 
-def convert_to_utc(datetime_obj, site):
-    """A function converting a local time to UTC"""
+def convert_to_utc(datetime_obj: datetime, site: str):
+    """Convert a naive local datetime to UTC using the given site timezone."""
     local = pytz.timezone(site)
     local_dt = local.localize(datetime_obj, is_dst=None)
-    utc_dt = local_dt.astimezone(pytz.utc)
-    return utc_dt
+    return local_dt.astimezone(pytz.utc)
 
 
-def make_start_end_datetime(redcap_csv, filename, site):
+def _filename_match_score(candidate: str, filename: str) -> float:
+    if not isinstance(candidate, str):
+        return 0.0
+    tokens = [tok.lower() for tok in re.split(r"[-:_.]", candidate) if tok]
+    if not tokens:
+        return 0.0
+    return float(np.mean([token in filename.lower() for token in tokens]))
+
+
+def _infer_doff_datetime(record_date: str, don_time:str, doff_time: str) -> datetime:
+    don_dt = datetime.strptime(f"{record_date}-{don_time}", "%Y%m%d-%H:%M")
+    doff_dt = datetime.strptime(f"{record_date}-{doff_time}", "%Y%m%d-%H:%M")
+
+    don_hour = int(don_time.split(":")[0])
+    doff_hour = int(doff_time.split(":")[0])
+    nextday = ((doff_hour < 14) and (abs(don_hour - doff_hour) < 10)) or (doff_hour < 12)
+
+    if nextday:
+        doff_dt += timedelta(days=1)
+    return doff_dt
+
+
+def make_start_end_datetime(redcap_csv, filename: str, site: str):
     """
-    A function to make two datetime objects based on the
-        entries from the REDCap export
+    Build UTC don/doff datetimes from REDCap-style metadata.
+
+    Notes
+    -----
+    This helper is project-specific and intentionally retains the existing
+    REDCap filename matching and overnight heuristic. It should be considered
+    study metadata glue rather than a universal IMU timestamp utility.
 
     Parameters
     ----------
@@ -182,66 +243,22 @@ def make_start_end_datetime(redcap_csv, filename, site):
     #   export file to generate don_dt and doff_dt (dt: datetime object)
 
     path_removed = filename.split('/')[-1]
+    match_scores = redcap_csv.filename.apply(lambda x: _filename_match_score(x, filename))
+    match_idx = np.where(match_scores > 0.5)[0]
 
-    def match_any(string, filename):
-        """
-        Highly likely, entries of the column: filename in redcap_csv
-            could be erroneous. Therefore, to be on the safe side,
-            split REDCap entry and check if more than half the splitted items
-            are included in the filename.
-        """
-        result = False
-        if isinstance(string, str):
-            splitted = re.split('[-:_.]', string)
-            lowered = list(map(lambda x: x.lower(), splitted))
-            result = np.mean([x in filename.lower() for x in lowered]) > 0.5
+    if match_idx.size == 0:
+        logger.warning("No REDCap filename match found for %s", filename)
+        return None
 
-        return result
+    don_n_doff = redcap_csv.loc[match_idx[0], ["don_t", "doff_t"]]
+    if pd.isna(don_n_doff[0]) or pd.isna(don_n_doff[1]):
+        logger.info("Missing don/doff values for %s; returning None.", filename)
+        return None
 
-    idx = redcap_csv.filename.apply(lambda x: match_any(x, filename))
+    record_date = path_removed.split("-")[0]
+    don_dt = datetime.strptime(f"{record_date}-{don_n_doff[0]}", "%Y%m%d-%H:%M")
+    # Preserve the original +1 minute protection against slightly early REDCap don times.
+    don_dt += timedelta(minutes=1)
+    doff_dt = _infer_doff_datetime(record_date, don_n_doff[0], don_n_doff[1])
 
-    don_n_doff = redcap_csv.loc[np.where(idx)[0][0], ['don_t', 'doff_t']]
-    # don_n_doff = times.values[0]  # times is a Pandas Series
-
-    # 2/10/23, don_n_doff could be NaN, meaning that people forgot to
-    # enter times to the REDCap. NaN is "float".
-    # If that's the case, return None
-    if isinstance(don_n_doff[0], float):
-        utc_don_doff = None
-    else:
-        temp = path_removed.split('-')[0]
-        don_h, _ = don_n_doff[0].split(":")
-        doff_h, _ = don_n_doff[1].split(":")
-
-        don_dt = datetime.strptime('-'.join([temp, don_n_doff[0]]),
-                                   '%Y%m%d-%H:%M') + timedelta(minutes=1)
-        doff_temp = datetime.strptime('-'.join([temp, don_n_doff[1]]),
-                                      '%Y%m%d-%H:%M')
-        # There are cases where the REDCap values are spurious at best.
-        # Sometimes the first time point recorded in sensors could be later
-        #   than what's listed as the time_donned in the REDCap file by
-        #   few microseconds.
-        # This would case the problem later, as the method of the Subject class
-        #   [_prep_row_idx] will 'assume' that the opposite is always true,
-        #   and calculate: REDCap time_donned - sensor initial time.
-        # Of course this will be a negative value, ruining everything; so add
-        #   a minute to what's reported on the REDCap time donned.
-        # If the time sensors were doffed was early in the morning (ex. 2 AM)
-        #   you know that a day has passed.
-        # The condition below, however, may not catch every possible exception.
-        # Let's hope for the best that everyone removed the sensors
-        #   before 2 PM the next day.
-
-        nextday = any((all((
-            int(doff_h) < 14,
-            abs(int(don_h) - int(doff_h)) < 10)), int(doff_h) < 12))
-
-        if nextday:
-            doff_dt = doff_temp + timedelta(days=1)
-        else:
-            doff_dt = doff_temp
-
-        # site-specific don/doff times are converted to UTC time
-        utc_don_doff = list(map(
-            lambda lst: convert_to_utc(lst, site), [don_dt, doff_dt]))
-    return utc_don_doff
+    return [convert_to_utc(don_dt, site), convert_to_utc(doff_dt, site)]

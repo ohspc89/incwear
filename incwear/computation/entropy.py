@@ -6,7 +6,6 @@ Entropy related functions
 
 © 2023-2025 Infant Neuromotor Control Laboratory. All rights reserved.
 """
-import numpy as np
 from EntropyHub import SampEn, FuzzEn
 
 
