@@ -12,13 +12,12 @@ Third-party components
 
 import numpy as np
 from pyarrow import csv
+import pyarrow.parquet as pq
 from skdh.io import ReadCwa
 
 from incwear.errors import InvalidSensorFormatError
 
-sv_readOptions = csv.ReadOptions(
-    column_names=[],
-    autogenerate_column_names=True)
+sv_readOptions = csv.ReadOptions(column_names=[], autogenerate_column_names=True)
 
 
 def read_tsv(filepath, columns=None):
@@ -37,18 +36,46 @@ def read_tsv(filepath, columns=None):
     numpy.ndarray
     """
     opts = csv.ReadOptions(column_names=columns) if columns else sv_readOptions
-    parse_opts = csv.ParseOptions(delimiter='\t')
-    with open(filepath, 'rb') as f1:
-        tsv_data = np.asarray(csv.read_csv(
-            f1,
-            read_options=opts,
-            parse_options=parse_opts,
-        ))
+    parse_opts = csv.ParseOptions(delimiter="\t")
+    with open(filepath, "rb") as f1:
+        tsv_data = np.asarray(
+            csv.read_csv(
+                f1,
+                read_options=opts,
+                parse_options=parse_opts,
+            )
+        )
     if tsv_data.ndim != 2 or tsv_data.shape[1] < 7:
         raise InvalidSensorFormatError(
             f"Expected TSV with at least 7 columns, got shape {tsv_data.shape}."
         )
     return tsv_data
+
+
+def read_parquet(filepath, columns=None):
+    """
+    Read Parquet file using pyarrow.
+
+    Parameters
+    ----------
+    filepath : str
+        Path to Parquet file
+    columns : list or None
+        Column names to load
+
+    Returns
+    -------
+    numpy.ndarray
+    """
+    table = pq.read_table(filepath, columns=columns)
+    parquet_data = table.to_pandas().to_numpy()
+
+    if parquet_data.ndim != 2 or parquet_data.shape[1] < 7:
+        raise InvalidSensorFormatError(
+            f"Expected data with at least 7 columns, got shape {parquet_data.shape}."
+        )
+
+    return parquet_data
 
 
 def read_csv(filepath, columns=None):

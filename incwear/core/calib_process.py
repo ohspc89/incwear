@@ -6,6 +6,7 @@ Calibration related functions
 
 © 2023-2026 Infant Neuromotor Control Laboratory. All rights reserved.
 """
+
 import logging
 import warnings
 from dataclasses import dataclass, field
@@ -40,26 +41,35 @@ class CalibFileInfo:
     off_gs : list[numpy.ndarray]
         Offset removed +/- 1g measurements
     boost_gs : list
-        Gain corrected?
-    samp_num : list
+        Legacy misalignment-adjusted posture means.
+    samp_num : dict
         Sample numbers of the windows where
         x, y, z +/- 1g measurements were obtained
     """
+
     offset: list = field(default_factory=list)
     misalign: list = field(default_factory=list)
     raw_gs: list = field(default_factory=list)
     off_gs: list = field(default_factory=list)
     boost_gs: list = field(default_factory=list)
-    samp_num: list = field(default_factory=list)
-    fname: str = ''
+    samp_num: dict = field(default_factory=dict)
+    fname: str = ""
     fs: Optional[int] = 25
-    timezone: str = ''
+    timezone: str = ""
 
 
 class CalibProcess:
-    """ Handles axis-specific calibration using known +/-1g postures."""
-    def __init__(self, absolute=False, g_thresholds=None,
-                 winlen=5, stdcut=0.02, **kwargs):
+    """Handles axis-specific calibration using known +/-1g postures."""
+
+    def __init__(
+        self,
+        absolute=False,
+        g_thresholds=None,
+        winlen=5,
+        stdcut=0.02,
+        strict=False,
+        **kwargs,
+    ):
         """
         Parameters
         ----------
@@ -78,53 +88,64 @@ class CalibProcess:
         stdcut : float
             Cutoff of the standard deviation of the values within a window.
             Default is 0.02.
+        strict : bool, optional
+            If True, raise CalibrationError when required calibration windows
+            or samples are missing. Otherwise, warn and continue; estimates
+            that depend on missing samples may be NaN. Defaults to False.
         """
         self._name = self.__class__.__name__
         self._kw = kwargs
         self.absolute = absolute
         self.g_thresholds = g_thresholds or [0.9, 1.1]
         if winlen is None:
-            self.winlen = {'x': 5, 'y': 5, 'z': 5}
+            self.winlen = {"x": 5, "y": 5, "z": 5}
         elif isinstance(winlen, list):
             if len(winlen) == 1:
-                self.winlen = {k: winlen[0] for k in 'xyz'}
+                self.winlen = {k: winlen[0] for k in "xyz"}
             elif len(winlen) == 3:
-                self.winlen = dict(zip(['x', 'y', 'z'], winlen))
+                self.winlen = dict(zip(["x", "y", "z"], winlen))
             else:
                 raise ValueError("winlen should be a list of 3, or an integer")
         else:
-            self.winlen = {k: winlen for k in 'xyz'}
+            self.winlen = {k: winlen for k in "xyz"}
 
         self.stdcut = stdcut
         self.info = CalibFileInfo()
         self.strict = kwargs.get("strict", False)
 
     def find_window_both(self, arr, axis, winlen=None):
-        """Wrapper to find positive and negative calibration windows."""
+        """Find stable positive and negative gravity windows for one axis.
+
+        Widen the accepted gravity range, then try shorter windows if needed.
+        Return source row indices under the keys 'p' and 'n'. If a window is
+        missing, raise CalibrationError in strict mode; otherwise warn and
+        return an empty index array for the missing polarity.
+        """
         thresholds = self.g_thresholds.copy()
         # If axis value is not provided, or not one of 'x', 'y', or 'z',
         # raise an error
         axis = axis.lower()
-        if axis not in 'xyz':
+        if axis not in "xyz":
             raise ValueError("axis value incorrect - pick one: 'x', 'y', 'z'")
         # start with the initial threshold values.
         winlen = winlen or self.winlen[axis]
-        logger.debug("Searching %s-axis calibration windows within winlen=%s", axis.upper(), winlen)
+        logger.debug(
+            "Searching %s-axis calibration windows within winlen=%s",
+            axis.upper(),
+            winlen,
+        )
 
         while True:
             sns = self.find_sns(arr, thresholds[0], thresholds[1])
             pwin, nwin = map(
-                self.find_window,
-                [arr] * 2,
-                [sns['p'], sns['n']],
-                repeat(winlen, 2)
+                self.find_window, [arr] * 2, [sns["p"], sns["n"]], repeat(winlen, 2)
             )
 
             if pwin is not None and nwin is not None:
                 self.winlen[axis] = winlen
-                return {'p': pwin, 'n': nwin}
+                return {"p": pwin, "n": nwin}
 
-            if thresholds[0] > .75 and thresholds[1] < 1.25:
+            if thresholds[0] > 0.75 and thresholds[1] < 1.25:
                 thresholds[0] -= 0.05
                 thresholds[1] += 0.05
                 logger.info(
@@ -153,7 +174,7 @@ class CalibProcess:
                         f"winlen < 1s. Calibration output for {axis} (negative) will be NaNs."
                     )
                     nwin = np.empty(0, int)
-                return {'p': pwin, 'n': nwin}
+                return {"p": pwin, "n": nwin}
 
             logger.info(
                 "Reducing %s-axis calibration window length to %s second(s).",
@@ -161,10 +182,14 @@ class CalibProcess:
                 winlen,
             )
 
-
     def find_window(self, arr, sampnums, winlen=None):
         """
-        Find contiguous low-variance sample numbers of length `winlen`.
+        Find contiguous, low-variability window in the candidate rows.
+
+        Convert winlen from seconds to a sample count using info.fs. Inspect
+        candidate starts in steps of 10 positions within sampnums. Return the
+        first window whose source rows are consecutive and whose standard
+        deviation is below stdcut, or None if no tested window qualifies.
 
         Parameters
         ----------
@@ -189,20 +214,24 @@ class CalibProcess:
         ia, ib = 0, int(win_size)
 
         # (8/7/23) ib should not be greater than the end of sampnums...
-        while ib < len(sampnums):
+        while ib <= len(sampnums):
             # Continuity should be kept!
             # 0.02 is experimental - could adjust later (6/22/23)
             segment = sampnums[ia:ib]
             if np.all(np.diff(segment) == 1) and np.std(arr[segment]) < self.stdcut:
                 return segment
             ia += 10
-            ib += 10    # push back by 10 data points.
+            ib += 10  # push back by 10 data points.
         return None
 
     @staticmethod
     def find_sns(arr, thr_low, thr_high):
-        """
-        A function to find SampleNumberS (sns)
+        """Return row indices whose acceleration falls within the gravity bounds.
+        (SampleNumberS)
+
+        Return a dictionary with 'p' for values strictly between thr_low and
+        thr_high, and 'n' for values strictly between -thr_high and -thr_low.
+        Thresholds and acceleration values are in g.
 
         Paramters
         ---------
@@ -220,35 +249,38 @@ class CalibProcess:
             'n' = arr sample numbers between -(thr_low) and -(thr_high).
         """
         return {
-            'p': np.where((arr < thr_high) & (arr > thr_low))[0],
-            'n': np.where((arr < -thr_low) & (arr > -thr_high))[0]
+            "p": np.where((arr < thr_high) & (arr > thr_low))[0],
+            "n": np.where((arr < -thr_low) & (arr > -thr_high))[0],
         }
 
-    
     @staticmethod
     def _window_is_missing(w):
-        return w['p'].size == 0 or w['n'].size == 0
-
+        """Return whether either polarity has no selected calibration rows."""
+        return w["p"].size == 0 or w["n"].size == 0
 
     def get_gs(self, ndarr):
         """
-        Calculate gain, offset, and misalignment from calibrated data.
+        Estimate axis offsets and gravity posture means from raw acceleration.
 
         Parameters
         ----------
         ndarr : numpy.ndarray
-            Raw measurement of +/-1g along the measurement axis.
+            Calibration acceleration in g, with shape (n_samples, 3).
 
         Returns
         -------
-        x: dict
-            offset: measurement offset along each axis
-            misalign: misalignment along each axis (DEPRECATED, unused)
-            processed: +/- 1g measurements minus axis-specific offset
-            gs_orig: original measurement of +/-1g along each axis
-            gs: corrected measurement of +/-1g along each axis
-            gs_boost: misalignment compensated gs (DEPRECATED, unused)
-            samp_num: sample numbers of the WINDOWS (return of find_windows)
+        dict
+            'offset' contains the three axis offsets in g. 'gs_orig' and 'gs'
+            contain posture means before and after offset subtraction, ordered
+            as x-, x+, y-, y+, z-, z+. 'samp_num' maps each axis and polarity
+            to its selected source row indices. 'misalign' and 'gs_boost' are
+            legacy outputs retained for compatibility.
+
+        Raises
+        ------
+        CalibrationError
+            If strict mode is enabled and required calibration windows or
+            samples are missing.
 
         Notes
         -----
@@ -258,9 +290,9 @@ class CalibProcess:
         release; do not build new code against them.
         """
         absolute = self.absolute
-        x_w, y_w, z_w = map(self.find_window_both,
-                            [ndarr[:, i] for i in range(3)],
-                            ['x', 'y', 'z'])
+        x_w, y_w, z_w = map(
+            self.find_window_both, [ndarr[:, i] for i in range(3)], ["x", "y", "z"]
+        )
 
         if any(self._window_is_missing(w) for w in (x_w, y_w, z_w)):
             msg = "Calibration windows missing for at least one axis."
@@ -271,12 +303,12 @@ class CalibProcess:
         # non-g sample numbers
         # For example, x_P(ositive)N(on)G is the concatenated regions
         # where y or z axis was measuring positive g (1 g)
-        x_png = sorted(np.concatenate((y_w['p'], z_w['p'])))
-        x_nng = sorted(np.concatenate((y_w['n'], z_w['n'])))
-        y_png = sorted(np.concatenate((x_w['p'], z_w['p'])))
-        y_nng = sorted(np.concatenate((x_w['n'], z_w['n'])))
-        z_png = sorted(np.concatenate((x_w['p'], y_w['p'])))
-        z_nng = sorted(np.concatenate((x_w['n'], y_w['n'])))
+        x_png = sorted(np.concatenate((y_w["p"], z_w["p"])))
+        x_nng = sorted(np.concatenate((y_w["n"], z_w["n"])))
+        y_png = sorted(np.concatenate((x_w["p"], z_w["p"])))
+        y_nng = sorted(np.concatenate((x_w["n"], z_w["n"])))
+        z_png = sorted(np.concatenate((x_w["p"], y_w["p"])))
+        z_nng = sorted(np.concatenate((x_w["n"], y_w["n"])))
 
         if any(len(v) == 0 for v in (x_png, x_nng, y_png, y_nng, z_png, z_nng)):
             msg = "Insufficient non-g samples to compute reliable calibration offsets."
@@ -292,45 +324,54 @@ class CalibProcess:
         offset = [
             np.mean(ndarr[x_non_g, 0]),
             np.mean(ndarr[y_non_g, 1]),
-            np.mean(ndarr[z_non_g, 2])
+            np.mean(ndarr[z_non_g, 2]),
         ]
         # measured g values, offset NOT removed
         gs_orig = [
-            np.mean(ndarr[x_w['n'], 0]), np.mean(ndarr[x_w['p'], 0]),
-            np.mean(ndarr[y_w['n'], 1]), np.mean(ndarr[y_w['p'], 1]),
-            np.mean(ndarr[z_w['n'], 2]), np.mean(ndarr[z_w['p'], 2]),
+            np.mean(ndarr[x_w["n"], 0]),
+            np.mean(ndarr[x_w["p"], 0]),
+            np.mean(ndarr[y_w["n"], 1]),
+            np.mean(ndarr[y_w["p"], 1]),
+            np.mean(ndarr[z_w["n"], 2]),
+            np.mean(ndarr[z_w["p"], 2]),
         ]
         # Remove offsets
         corrected = ndarr - np.array(offset)
         # Then check for the amount of misalignment
         # Use only the positive values... doesn't matter much
         if absolute:
-            xm, ym, zm = map(lambda x: np.mean(abs(x)),
-                             [corrected[x_png, 0],
-                              corrected[y_png, 1],
-                              corrected[z_png, 2]])
+            xm, ym, zm = map(
+                lambda x: np.mean(abs(x)),
+                [corrected[x_png, 0], corrected[y_png, 1], corrected[z_png, 2]],
+            )
         else:
-            xm, ym, zm = map(np.mean,
-                             [corrected[x_png, 0],
-                              corrected[y_png, 1],
-                              corrected[z_png, 2]])
+            xm, ym, zm = map(
+                np.mean, [corrected[x_png, 0], corrected[y_png, 1], corrected[z_png, 2]]
+            )
         # measured g values, offset removed
         gs = [
-            np.mean(corrected[x_w['n'], 0]),
-            np.mean(corrected[x_w['p'], 0]),
-            np.mean(corrected[y_w['n'], 1]),
-            np.mean(corrected[y_w['p'], 1]),
-            np.mean(corrected[z_w['n'], 2]),
-            np.mean(corrected[z_w['p'], 2]),
+            np.mean(corrected[x_w["n"], 0]),
+            np.mean(corrected[x_w["p"], 0]),
+            np.mean(corrected[y_w["n"], 1]),
+            np.mean(corrected[y_w["p"], 1]),
+            np.mean(corrected[z_w["n"], 2]),
+            np.mean(corrected[z_w["p"], 2]),
         ]
         # misalignment reflected (percentage boost)
-        gs_boost = [gs[0]*(1+xm), gs[1]*(1+xm),
-                    gs[2]*(1+ym), gs[3]*(1+ym),
-                    gs[4]*(1+zm), gs[5]*(1+zm)]
+        gs_boost = [
+            gs[0] * (1 + xm),
+            gs[1] * (1 + xm),
+            gs[2] * (1 + ym),
+            gs[3] * (1 + ym),
+            gs[4] * (1 + zm),
+            gs[5] * (1 + zm),
+        ]
 
-        return {'offset': offset,
-                'misalign': [xm, ym, zm],
-                'gs_orig': gs_orig,
-                'gs': gs,
-                'gs_boost': gs_boost,
-                'samp_num': {'x': x_w, 'y': y_w, 'z': z_w}}
+        return {
+            "offset": offset,
+            "misalign": [xm, ym, zm],
+            "gs_orig": gs_orig,
+            "gs": gs,
+            "gs_boost": gs_boost,
+            "samp_num": {"x": x_w, "y": y_w, "z": z_w},
+        }

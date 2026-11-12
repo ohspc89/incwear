@@ -9,13 +9,12 @@ accommodating the need of processing data from different sensors.
 
 © 2023-2026 Infant Neuromotor Control Laboratory. All rights reserved.
 """
+
 import numpy as np
 from incwear.utils.data_models import RecordingInfo, Processed, Thresholds
-from incwear.utils.thresholds import (get_ind_acc_threshold,
-                                      get_ind_acc_threshold2)
+from incwear.utils.thresholds import get_ind_acc_threshold, get_ind_acc_threshold2
 from incwear.utils.plot_segment import plot_segment
-from incwear.core.preprocessing import (get_mag, correct_gain,
-                                        low_pass, resample_to)
+from incwear.core.preprocessing import get_mag, correct_gain, low_pass, resample_to
 from incwear.core.movement_detection import get_cntc, get_mov
 
 
@@ -25,6 +24,7 @@ class BaseProcess:
 
     Inherited by classes including: axivity.Ax6, apdm.OpalV2
     """
+
     def __str__(self):
         return self._name
 
@@ -43,46 +43,53 @@ class BaseProcess:
         return False
 
     def __init__(self, **kwargs):
-        """ Parameters will be inherited-class specific """
+        """Initialize recording metadata and placeholder processed measures."""
         self._name = self.__class__.__name__
         self._kw = kwargs
 
         # Placehodler - will be updated
         self.info = RecordingInfo(
-                fname=None,
-                configured_record_times={'Start': None, 'End': None},
-                record_times={'Start': None, 'End': None},
-                fs=0,
-                fc=0,
-                timezone='',
-                label_r=None,
-                rowidx=None,
-                recordlen=0,
-                )
+            fname=None,
+            configured_record_times={"Start": None, "End": None},
+            record_times={"Start": None, "End": None},
+            fs=0,
+            fc=0,
+            timezone="",
+            label_r=None,
+            rowidx=None,
+            recordlen=0,
+        )
 
         # Update if file names are provided?
-        if 'filename' in kwargs:
-            self.info.fname = str(kwargs.get('filename'))
+        if "filename" in kwargs:
+            self.info.fname = str(kwargs.get("filename"))
 
         self.measures = Processed(
-            accmags = np.array([0, 0, 0, 0, 0]),
-            velmags = np.array([0, 0, 0, 0, 0]),
-            thresholds=Thresholds(accth=1.0, naccth=-1.0, method="placeholder")
-            )
+            accmags=np.array([0, 0, 0, 0, 0]),
+            velmags=np.array([0, 0, 0, 0, 0]),
+            thresholds=Thresholds(accth=1.0, naccth=-1.0, method="placeholder"),
+        )
 
-    def compute_magnitudes(self, arr, row_idx=None, det_option='median'):
+    def compute_magnitudes(self, arr, row_idx=None, det_option="median"):
         self.measures.accmags = get_mag(arr, row_idx, det_option)
 
-    def compute_velocities(self, arr, row_idx=None, det_option='median'):
+    def compute_velocities(self, arr, row_idx=None, det_option="median"):
+        """Store baseline-centered angular velocity norms for the selected rows.
+
+        The stored values retain the units of arr.
+        """
         self.measures.velmags = get_mag(arr, row_idx, det_option)
 
     def compute_thresholds(self, use_v2=True):
+        """Estimate acceleration thresholds and refresh the threshold flags.
+
+        Use the version 2 estimator by default. Set use_v2=False to use the
+        original estimator. Update self.measures in place.
+        """
         if not use_v2:
-            self.measures.thresholds = \
-                    get_ind_acc_threshold(self.measures.accmags)
+            self.measures.thresholds = get_ind_acc_threshold(self.measures.accmags)
         else:
-            self.measures.thresholds = \
-                    get_ind_acc_threshold2(self.measures.accmags)
+            self.measures.thresholds = get_ind_acc_threshold2(self.measures.accmags)
 
         # trigger re-evaluation of dependent flags
         self.measures.__post_init__()
@@ -95,20 +102,30 @@ class BaseProcess:
             th_crossed=self.measures.th_crossed,
             over_accth=self.measures.over_accth,
             under_naccth=self.measures.under_naccth,
-            ttdist=ttdist
+            ttdist=ttdist,
         )
 
     # You don't need this though
     def get_counts(self):
+        """Return movement counts from the processed signals and acceleration flags."""
         return get_cntc(
             accmags=self.measures.accmags,
             velmags=self.measures.velmags,
             over_accth=self.measures.over_accth,
-            under_naccth=self.measures.under_naccth
+            under_naccth=self.measures.under_naccth,
         )
 
-    def plot_segments(self, time_passed, duration=20, side='L',
-                      movmat=None, title=None, show=True, savepath=None):
+    def plot_segments(
+        self,
+        time_passed,
+        duration=20,
+        side="L",
+        movmat=None,
+        title=None,
+        show=True,
+        savepath=None,
+    ):
+        """Plot a segment of the processed signals, optionally with movement markers."""
         return plot_segment(
             self,
             time_passed=time_passed,
@@ -117,20 +134,27 @@ class BaseProcess:
             movmat=movmat,
             title=title,
             show=show,
-            savepath=savepath
+            savepath=savepath,
         )
 
     @staticmethod
     def correct_gain(arr, gains):
+        """Divide each signal axis by its gain factor."""
         return correct_gain(arr, gains)
 
     @staticmethod
-    def low_pass(fc, fs, arr, window='hamming'):
+    def low_pass(fc, fs, arr, window="hamming"):
+        """Apply the preprocessing module's two-tap FIR low-pass filter."""
         return low_pass(fc, fs, arr, window)
 
     @staticmethod
-    def resample_to(arr, orig_fs, re_fs, ts, **kwargs):
-        return resample_to(arr, orig_fs, re_fs, ts, **kwargs)
+    def resample_to(arr, ts, target_fs, **kwargs):
+        """Resample a signal and return times relative to the first input sample.
+
+        Forward optional settings, including max_gap_seconds, to the
+        preprocessing function.
+        """
+        return resample_to(arr, ts, target_fs, **kwargs)
 
 
 class MergedLeg(BaseProcess):
@@ -156,7 +180,8 @@ class MergedLeg(BaseProcess):
 
     Because this is a ``BaseProcess``, a merged limb is a drop-in for a normal
     leg object: ``plot_segments``, ``computation.movement_metrics`` helpers,
-    and ``detect_movements`` all work on it unchanged.
+    and ``detect_movements`` all work on it unchanged. Segments gaps are not
+    preserved in the concatenated sample index.
 
     Parameters
     ----------
@@ -188,9 +213,7 @@ class MergedLeg(BaseProcess):
 
         fs = segments[0].info.fs
         if any(s.info.fs != fs for s in segments):
-            raise ValueError(
-                "All segments must share the same sampling frequency."
-            )
+            raise ValueError("All segments must share the same sampling frequency.")
 
         # 1. Global threshold over the full concatenated limb signal.
         concat_acc = np.concatenate([s.measures.accmags for s in segments])
@@ -200,9 +223,7 @@ class MergedLeg(BaseProcess):
 
         # Per-segment thresholds, retained as a data-quality check on how well
         # calibration reconciled the different sensors.
-        self.segment_thresholds = [
-            thresh_fn(s.measures.accmags) for s in segments
-        ]
+        self.segment_thresholds = [thresh_fn(s.measures.accmags) for s in segments]
 
         # 2. Detect within each segment using the shared threshold, then shift
         #    the index columns (start, mid, end) into the global timeline.
@@ -227,9 +248,7 @@ class MergedLeg(BaseProcess):
 
         # The last boundary equals recordlen; keep only the internal joins.
         self.splice_indices = splice_indices[:-1]
-        self.movmat = (
-            np.vstack(movmats) if movmats else np.empty((0, 4), dtype=int)
-        )
+        self.movmat = np.vstack(movmats) if movmats else np.empty((0, 4), dtype=int)
         self._ttdist = ttdist
 
         # Populate the standard BaseProcess containers so downstream code that
@@ -243,11 +262,11 @@ class MergedLeg(BaseProcess):
         self.info.recordlen = offset
 
     def detect_movements(self, ttdist=None):
-        """Return the cached merged movement matrix.
+        """Detect movements in the processed acceleration and angular velocity signals.
 
-        Detection already ran per segment at merge time (to avoid pairing a
-        movement across a sensor-swap boundary), so the result is cached rather
-        than recomputed on the concatenation.
+        Pass ttdist to the detector as the threshold-to-threshold distance.
+        Return a movement matrix whose start, midpoint, and end columns index
+        the processed arrays. The fourth column stores the lag.
         """
         if ttdist is not None and ttdist != self._ttdist:
             raise ValueError(
@@ -259,8 +278,9 @@ class MergedLeg(BaseProcess):
 
 def merge_segments(segments, use_v2=True, ttdist=8):
     """
-    Merge chronologically ordered same-limb recording segments into one
-    :class:`MergedLeg`. See :class:`MergedLeg` for the rationale and the
-    parameters. Returns a leg-like object usable anywhere a normal leg is.
+    Merge ordered same-limb segments into one MergedLeg.
+
+    Estimate a shared acceleration threshold and detect movements within
+    each segment. Return movement indices in the concatenated sample space.
     """
     return MergedLeg(segments, use_v2=use_v2, ttdist=ttdist)
